@@ -339,6 +339,23 @@ class TestAFCHubInit:
             hub = afc_hub(config)
         buttons_mock.register_buttons.assert_called_once()
 
+    def test_physical_hub_init_accepts_single_sensor_when_runout_disabled(self):
+        from tests.conftest import MockConfig, MockPrinter, MockAFC
+        afc = MockAFC()
+        printer = MockPrinter(afc=afc)
+        buttons_mock = MagicMock()
+        printer._objects["buttons"] = buttons_mock
+        config = MockConfig(
+            name="AFC_hub phys_hub", printer=printer,
+            values={"switch_pin": "!hotend:PB2", "enable_hub_runout": False}
+        )
+        sensor = MagicMock()
+        with patch("extras.AFC_hub.add_filament_switch", return_value=sensor):
+            hub = afc_hub(config)
+        assert hub.fila is sensor
+        assert hub.debounce_button is None
+        buttons_mock.register_buttons.assert_called_once_with(["!hotend:PB2"], hub.switch_pin_callback)
+
 
 # ── hub_cut ───────────────────────────────────────────────────────────────────
 

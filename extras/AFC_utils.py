@@ -42,7 +42,7 @@ def add_filament_switch( switch_name, switch_pin, printer, show_sensor=True, run
     :param switch_pin: Pin to add to config for switch
     :param printer: printer object
 
-    :return returns filament_switch_sensor object
+    :return returns tuple of filament_switch_sensor object and debounce button
     """
     import configparser
     import configfile
@@ -79,10 +79,7 @@ def add_filament_switch( switch_name, switch_pin, printer, show_sensor=True, run
         fila.runout_helper.runout_gcode = 1
         fila.runout_helper._runout_event_handler = runout_callback # Overriding filament event handler with AFC handler
 
-    if enable_runout:
-        return fila, debounce_button
-
-    return fila
+    return fila, debounce_button
 
 
 def check_and_return( value_str:str, data_values:dict ) -> str:

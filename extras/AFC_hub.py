@@ -62,10 +62,20 @@ class afc_hub:
 
         if self.switch_pin.lower() != "virtual":
             buttons = self.printer.load_object(config, "buttons")
-            self.fila, self.debounce_button = add_filament_switch(f"{self.name}_Hub", self.switch_pin,
-                                                                  self.printer, self.enable_sensors_in_gui,
-                                                                  self.handle_runout, self.enable_runout,
-                                                                  self.debounce_delay)
+            created = add_filament_switch(
+                f"{self.name}_Hub",
+                self.switch_pin,
+                self.printer,
+                self.enable_sensors_in_gui,
+                self.handle_runout,
+                self.enable_runout,
+                self.debounce_delay,
+            )
+            if isinstance(created, tuple):
+                self.fila, self.debounce_button = created
+            else:
+                self.fila = created
+                self.debounce_button = None
             buttons.register_buttons([self.switch_pin], self.switch_pin_callback)
 
         # Adding self to AFC hubs

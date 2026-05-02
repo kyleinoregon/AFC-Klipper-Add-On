@@ -382,6 +382,8 @@ class MockAFC:
         self.led_loading = "0,0,1,0"
         self.led_unloading = "0,0,1,0"
         self.led_tool_loaded = "0,1,0,0"
+        self.led_tool_loaded_idle = "0,0,0,1"
+        self.led_tool_unloaded = "1,0,0,0"
         self.led_spool_illum = "1,1,1,0"
         self.led_off = "0,0,0,0"
         # function mock helpers
