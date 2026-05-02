@@ -52,6 +52,36 @@ except: raise error(ERROR_STR.format(import_lib="AFC_stepper", trace=traceback.f
 
 LARGE_TIME_OFFSET = 99999.9
 
+
+class _LocalAFCStat:
+    def __init__(self, value=0):
+        self._value = value
+
+    def __str__(self):
+        return str(self._value)
+
+    @property
+    def value(self):
+        return self._value
+
+    @value.setter
+    def value(self, value):
+        self._value = value
+
+    def increase_count(self):
+        self._value += 1
+
+    def reset_count(self):
+        self._value = 0
+
+    def update_database(self):
+        return
+
+    def set_current_time(self):
+        from datetime import datetime
+        time = datetime.now()
+        self._value = time.strftime("%Y-%m-%d %H:%M")
+
 class AFCExtruderStats:
     """
     Holds a single value for stat tracking. Also has common functions to
@@ -76,16 +106,18 @@ class AFCExtruderStats:
         self.logger = extruder_obj.logger
         self.moonraker: AFC_moonraker
 
-        self.cut_total: AFCStats_var
-        self.cut_total_since_changed: AFCStats_var
-        self.last_blade_changed: AFCStats_var
+        self.cut_total: AFCStats_var|_LocalAFCStat = _LocalAFCStat()
+        self.cut_total_since_changed: AFCStats_var|_LocalAFCStat = _LocalAFCStat()
+        self.last_blade_changed: AFCStats_var|_LocalAFCStat = _LocalAFCStat("N/A")
         self.cut_threshold_for_warning: int  = cut_threshold
         self.threshold_warning_sent     = False
         self.threshold_error_sent       = False
 
-        self.tc_total: AFCStats_var
-        self.tc_tool_unload: AFCStats_var
-        self.tc_tool_load: AFCStats_var
+        self.tc_total: AFCStats_var|_LocalAFCStat = _LocalAFCStat()
+        self.tc_tool_unload: AFCStats_var|_LocalAFCStat = _LocalAFCStat()
+        self.tc_tool_load: AFCStats_var|_LocalAFCStat = _LocalAFCStat()
+        self.tool_selected: AFCStats_var|_LocalAFCStat = _LocalAFCStat()
+        self.tool_unselected: AFCStats_var|_LocalAFCStat = _LocalAFCStat()
 
 
     def handle_moonraker_stats(self):
@@ -188,7 +220,8 @@ class AFCExtruderStats:
         error count.
         """
         self.tc_total.increase_count()
-        self.obj.afc.afc_stats.increase_toolchange_wo_error()
+        if self.obj.afc.afc_stats is not None:
+            self.obj.afc.afc_stats.increase_toolchange_wo_error()
 
     def reset_stats(self):
         """

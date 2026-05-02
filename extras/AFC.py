@@ -148,7 +148,7 @@ class afc:
         # Config get section
         self.moonraker_port         = config.get("moonraker_port", 7125)             # Port to connect to when interacting with moonraker. Used when there are multiple moonraker/klipper instances on a single host
         self.moonraker_host         = config.get("moonraker_host", "http://localhost")
-        self.moonraker_connect_to   = config.get("moonraker_timeout", 30)
+        self.moonraker_connect_to   = config.getint("moonraker_timeout", 30)
         self.unit_order_list        = config.get('unit_order_list','')
         self.VarFile                = config.get('VarFile','../printer_data/config/AFC/AFC.var')# Path to the variables file for AFC configuration.
         self.cfgloc                 = self._remove_after_last(self.VarFile,"/")
