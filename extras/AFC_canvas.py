@@ -49,6 +49,9 @@ class afcCanvas(afcUnit):
         self.tool_unload_lane_extra_speed = config.getfloat(
             "tool_unload_lane_extra_speed", self.short_moves_speed
         )
+        self.tool_load_lane_extra_distance = config.getfloat(
+            "tool_load_lane_extra_distance", None
+        )
         self.pause_on_tangle = config.getboolean("pause_on_tangle", True)
         self.tangle_pin = config.get("tangle_pin", None)
         self.enable_9v = self._setup_output_pin(config, config.get("enable_9v_pin", None))

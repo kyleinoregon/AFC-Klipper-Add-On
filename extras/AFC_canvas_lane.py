@@ -80,6 +80,12 @@ class AFCCanvasLane(AFCLane):
         self.tool_unload_lane_extra_speed = config.getfloat(
             "tool_unload_lane_extra_speed", None
         )
+        self.tool_load_lane_extra_distance = config.getfloat(
+            "tool_load_lane_extra_distance", None
+        )
+        self.tool_load_lane_extra_speed = config.getfloat(
+            "tool_load_lane_extra_speed", None
+        )
 
         if self.custom_load_cmd is None:
             self.custom_load_cmd = "AFC_CANVAS_TOOL_LOAD LANE={}".format(self.name)
@@ -110,7 +116,21 @@ class AFCCanvasLane(AFCLane):
         pin = pins.setup_pin("digital_out", pin_name)
         pin.setup_start_value(0.0, 0.0)
         pin.setup_max_duration(0.0)
+        pin.last_set_time = 0.0
         return pin
+
+    def _set_gpio_pin(self, pin, enabled):
+        if pin is None:
+            return
+        
+        print_time = pin.get_mcu().estimated_print_time(self.reactor.monotonic()) + pin.get_mcu().min_schedule_time() + 0.1
+        print_time = max(print_time, pin.last_set_time + 0.2)
+        pin.last_set_time = print_time
+
+        pin.set_digital(
+            print_time,
+            1 if enabled else 0,
+        )
 
     def _register_frontend_compat_aliases(self) -> None:
         for alias in (f"AFC_lane {self.name}", f"AFC_stepper {self.name}"):
@@ -154,6 +174,10 @@ class AFCCanvasLane(AFCLane):
         if self.tool_unload_lane_extra_speed is None:
             self.tool_unload_lane_extra_speed = getattr(
                 unit_obj, "tool_unload_lane_extra_speed", self.short_moves_speed
+            )
+        if self.tool_load_lane_extra_distance is None:
+            self.tool_load_lane_extra_distance = getattr(
+                unit_obj, "tool_load_lane_extra_distance", None
             )
 
     def move(self, distance, speed, accel, assist_active=False):
@@ -221,15 +245,6 @@ class AFCCanvasLane(AFCLane):
         speed_data = self.get_speed_accel(speed_mode)
         speed = speed_data[0] if isinstance(speed_data, tuple) else speed_data
         return self._canvas_move_until(endstop, distance, speed)
-
-    def _set_gpio_pin(self, pin, enabled):
-        if pin is None:
-            return
-        
-        pin.set_digital(
-            pin.get_mcu().estimated_print_time(self.reactor.monotonic() + pin.get_mcu().min_schedule_time() + 0.1),
-            1 if enabled else 0,
-        )
 
     def apply_canvas_led(self, color_string):
         channels = [item.strip() for item in str(color_string).split(",")]
@@ -355,115 +370,76 @@ class AFCCanvasLane(AFCLane):
             else:
                 self.afc.gcode.run_script_from_command(self.afc.form_tip_cmd)
 
-    def _assist_extruder_move(self, distance, speed, speed_offset, label, wait_tool=True):
+    def _assist_extruder_move(self, distance, speed, speed_offset, label):
         try:
             self.set_extruder_assist(speed if distance >= 0 else -speed, speed_offset)
-            self.afc.move_e_pos(distance, speed, label, wait_tool=wait_tool)
+            self.afc.move_e_pos(distance, speed, label, wait_tool=True)
         finally:
             self.canvas_motor.drv8833_set_speed(0.0)
 
     def cmd_AFC_CANVAS_TOOL_LOAD(self, gcmd):
+        '''
+        CANVAS-specific tool load command.
+        Steps:
+        1. Run normal load macros (park, form tip, heat nozzle) if configured.
+        2. Move the canvas lane until the shared toolhead sensor is triggered, if not already.
+        3. Move the canvas lane by tool_load_lane_extra_distance if configured.
+        4. Check if the odometer has moved (if not, something went wrong).
+        '''
         self.select_lane()
         self.afc._check_extruder_temp(self)
-        homing_enabled = getattr(self.afc, "homing_enabled", True)
-
-        if not self.get_toolhead_pre_sensor_state():
-            homed, _, warn = getattr(self.unit_obj, "move_to_hub")(
-                self,
-                self.dist_hub,
-                MoveDirection.POS,
-                homing_enabled,
-                speed_mode=SpeedMode.LONG,
-            )
-            if not homed or warn == AFCMoveWarning.ERROR:
-                self.afc.error.handle_lane_failure(
-                    self,
-                    "CANVAS load failed to reach the shared toolhead sensor for {}".format(
-                        self.name
-                    ),
-                )
-                return
-
-        self.loaded_to_hub = True
-
-        load_speed = self.extruder_obj.tool_load_speed
-        if getattr(self.extruder_obj, "tool_end", None):
-            attempts = 0
-            while not self.extruder_obj.tool_end_state:
-                attempts += 1
-                self._assist_extruder_move(
-                    self.short_move_dis,
-                    load_speed,
-                    self.tool_load_sync_speed_offset,
-                    "CANVAS tool end",
-                )
-                if attempts > 20:
-                    self.afc.error.handle_lane_failure(
-                        self,
-                        "CANVAS load failed to trigger post-extruder tool sensor for {}".format(
-                            self.name
-                        ),
-                    )
-                    return
 
         if self.afc.park:
             self.afc.gcode.run_script_from_command(
                 "{} EXTRUDER={}".format(self.afc.park_cmd, self.extruder_obj.name)
             )
 
-        self._assist_extruder_move(
-            self.extruder_obj.tool_stn,
-            load_speed,
-            self.tool_load_sync_speed_offset,
-            "CANVAS tool stn",
-            wait_tool=False,
-        )
+        if not self.get_toolhead_pre_sensor_state():
+            self.canvas_move_distance(self.dist_hub, self.long_moves_speed, self.short_move_dis, lambda: self.get_toolhead_pre_sensor_state())
+            
+            if not self.get_toolhead_pre_sensor_state():
+                # TODO: Change these exceptions into gcode errors with user-friendly messages
+                raise Exception(f"CANVAS load failed to reach the shared toolhead sensor for {self.name} after initial move")
+            
+        self.loaded_to_hub = True
+
+        if self.tool_load_lane_extra_distance is not None and self.tool_load_lane_extra_distance > 0:
+            self.afc.move_e_pos(self.tool_load_lane_extra_distance, self.extruder_obj.tool_load_speed, "CANVAS tool load extra move", wait_tool=False)
+            self.move(self.tool_load_lane_extra_distance, self.short_moves_speed, self.short_moves_accel)
+
+        self.disengage_motors(1.0)
+        self.reset_odometer()
+
+        if self.extruder_obj.tool_stn > 0:
+            self.afc.move_e_pos(self.extruder_obj.tool_stn, self.extruder_obj.tool_load_speed, "CANVAS tool load", wait_tool=True)
+
+        if self.odometer_count <= 5:
+            raise Exception(f"CANVAS load failed to move the lane for {self.name} (odometer count: {self.odometer_count})")
 
     def cmd_AFC_CANVAS_TOOL_UNLOAD(self, gcmd):
+        '''
+        CANVAS-specific tool unload command.
+        Steps:
+        1. Run normal unload macros (tool cut, park, form tip) if configured.
+        2. Move the extruder back by tool_stn_unload distance if configured.
+        3. Move the canvas lane back by tool_sensor_after_extruder distance if configured.
+        4. Disengage the motors.
+        '''
         self.select_lane()
         self.afc._check_extruder_temp(self)
-        self.afc.move_e_pos(-2, self.extruder_obj.tool_unload_speed, "Quick Pull", wait_tool=False)
         self.disable_buffer()
         self.unit_obj.lane_unloading(self)
         self._run_unload_macros()
 
-        unload_distance = self.extruder_obj.tool_stn_unload
-        if unload_distance > 0:
-            self._assist_extruder_move(
-                -unload_distance,
-                self.extruder_obj.tool_unload_speed,
-                self.tool_unload_sync_speed_offset,
-                "CANVAS tool unload",
-            )
+        if self.extruder_obj.tool_stn_unload > 0:
+            self.afc.move_e_pos(-self.extruder_obj.tool_stn_unload, self.extruder_obj.tool_unload_speed, "CANVAS tool unload", wait_tool=True)
 
-        if self.extruder_obj.tool_sensor_after_extruder > 0:
-            self._assist_extruder_move(
-                -self.extruder_obj.tool_sensor_after_extruder,
-                self.extruder_obj.tool_unload_speed,
-                self.tool_unload_sync_speed_offset,
-                "CANVAS after extruder",
-            )
-
-        attempts = 0
-        while self.get_toolhead_pre_sensor_state():
-            attempts += 1
-            self.move(-self.short_move_dis, self.short_moves_speed, self.short_moves_accel, False)
-            if attempts > self.afc.tool_max_unload_attempts:
-                self.afc.error.handle_lane_failure(
-                    self,
-                    "CANVAS unload failed to clear the shared toolhead sensor for {}".format(
-                        self.name
-                    ),
-                )
-                return
-
+        # TODO: This needs a different var
         if self.tool_unload_lane_extra_distance > 0:
-            self.move(
-                -self.tool_unload_lane_extra_distance,
-                self.tool_unload_lane_extra_speed,
-                self.short_moves_accel,
-                False,
-            )
+            self.move_with_odometer(-self.tool_unload_lane_extra_distance, self.long_moves_speed)
+
+        if self.get_toolhead_pre_sensor_state():
+            raise Exception(f"CANVAS unload failed to clear the shared toolhead sensor for {self.name} after extruder move")
 
         self.loaded_to_hub = False
         self.disengage_motors(-1.0)
