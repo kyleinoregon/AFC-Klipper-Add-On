@@ -186,6 +186,12 @@ class AFCCanvasLane(AFCLane):
             return
         self.canvas_motor.drv8833_move(speed, distance)
 
+    def prep_callback(self, eventtime, state):
+        if not self._afc_prep_done:
+            self._load_state = state
+
+        super().prep_callback(eventtime, state)
+
     def do_enable(self, enable):
         if not enable:
             self.canvas_motor.drv8833_set_speed(0.0)
