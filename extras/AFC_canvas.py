@@ -93,13 +93,7 @@ class afcCanvas(afcUnit):
         getattr(lane, "disengage_motors")(1.0)
 
     def eject_lane(self, lane):
-        getattr(lane, "canvas_move_distance")(
-            -abs(self.prep_distance),
-            self.prep_speed,
-            chunk_size=max(getattr(lane, "short_move_dis", self.short_move_dis), 1.0),
-            stop_condition=lambda: not bool(lane.prep_state),
-        )
-        lane.do_enable(False)
+        self.afc.error.AFC_error("CANVAS does not support ejecting lanes", pause=False)
 
     def move_to_hub(
         self,
