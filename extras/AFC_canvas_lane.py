@@ -401,11 +401,17 @@ class AFCCanvasLane(AFCLane):
             )
 
         if not self.get_toolhead_pre_sensor_state():
-            self.canvas_move_distance(self.dist_hub, self.long_moves_speed, self.short_move_dis, lambda: self.get_toolhead_pre_sensor_state())
+            start = self.reactor.monotonic()
+            self.canvas_motor.drv8833_set_speed(self.short_moves_speed)
+            while not self.get_toolhead_pre_sensor_state():
+                now = self.reactor.monotonic()
+                if now - start > 30.0:
+                    self.canvas_motor.drv8833_set_speed(0.0)
+                    # TODO: Change these exceptions into gcode errors with user-friendly messages
+                    raise Exception(f"CANVAS load failed to reach the shared toolhead sensor for {self.name} within 30 seconds")
+                self.reactor.pause(now + 0.005)
             
-            if not self.get_toolhead_pre_sensor_state():
-                # TODO: Change these exceptions into gcode errors with user-friendly messages
-                raise Exception(f"CANVAS load failed to reach the shared toolhead sensor for {self.name} after initial move")
+            self.canvas_motor.drv8833_set_speed(0.0)
             
         self.loaded_to_hub = True
 
@@ -413,7 +419,6 @@ class AFCCanvasLane(AFCLane):
             self.afc.move_e_pos(self.tool_load_lane_extra_distance, self.extruder_obj.tool_load_speed, "CANVAS tool load extra move", wait_tool=False)
             self.move(self.tool_load_lane_extra_distance, self.short_moves_speed, self.short_moves_accel)
 
-        self.disengage_motors(1.0)
         self.reset_odometer()
 
         if self.extruder_obj.tool_stn > 0:
@@ -421,6 +426,8 @@ class AFCCanvasLane(AFCLane):
 
         if self.odometer_count <= 5:
             raise Exception(f"CANVAS load failed to move the lane for {self.name} (odometer count: {self.odometer_count})")
+        
+        self.disengage_motors(1.0)
 
     def cmd_AFC_CANVAS_TOOL_UNLOAD(self, gcmd):
         '''
