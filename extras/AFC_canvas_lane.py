@@ -67,7 +67,7 @@ class AFCCanvasLane(AFCLane):
             buttons = self.printer.load_object(config, "buttons")
             buttons.register_buttons([self.odometer_pin], self.odometer_callback)
 
-        self.disengage_distance = config.getfloat("disengage_distance", 2.0)
+        self.disengage_distance = config.getfloat("disengage_distance", 1.0)
         self.tool_load_sync_speed_offset = config.getfloat(
             "tool_load_sync_speed_offset", None
         )

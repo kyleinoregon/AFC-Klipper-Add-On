@@ -322,8 +322,9 @@ class AFCSpool:
         # assigned to this lane. If SET_SPOOL_ID or SET_COLOR was called before loading
         # (e.g. from an NFC tag scan), the spool_id and/or color will already be set with
         # real values — don't overwrite them with defaults during the load sequence.
-        if not cur_lane.remember_spool and cur_lane.spool_id is None and not cur_lane.color:
+        if not cur_lane.remember_spool and cur_lane.spool_id is None:
             cur_lane.material = self.afc.default_material_type
+            cur_lane.color = '#000000'
             cur_lane.weight = 1000 # Defaulting weight to 1000 upon load
 
         if self.afc.spoolman is not None and self.next_spool_id is not None:

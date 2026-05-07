@@ -639,6 +639,7 @@ class TestSetValues:
         spool.set_spoolID = MagicMock()
         spool._set_values(lane)
         assert lane.material == "PLA"
+        assert lane.color == "#000000"
         assert lane.weight == 1000
         spool.set_spoolID.assert_not_called()
 
