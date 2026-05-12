@@ -405,10 +405,10 @@ class AFCCanvasLane(AFCLane):
             self.canvas_motor.drv8833_set_speed(self.short_moves_speed)
             while not self.get_toolhead_pre_sensor_state():
                 now = self.reactor.monotonic()
-                if now - start > 30.0:
+                if now - start > 15.0:
                     self.canvas_motor.drv8833_set_speed(0.0)
-                    # TODO: Change these exceptions into gcode errors with user-friendly messages
-                    raise Exception(f"CANVAS load failed to reach the shared toolhead sensor for {self.name} within 30 seconds")
+                    self.logger.error(f"CANVAS load failed to reach the shared toolhead sensor for {self.name} within 15 seconds.")
+                    return
                 self.reactor.pause(now + 0.005)
             
             self.canvas_motor.drv8833_set_speed(0.0)
@@ -425,7 +425,17 @@ class AFCCanvasLane(AFCLane):
             self.afc.move_e_pos(self.extruder_obj.tool_stn, self.extruder_obj.tool_load_speed, "CANVAS tool load", wait_tool=True)
 
         if self.odometer_count <= 5:
-            raise Exception(f"CANVAS load failed to move the lane for {self.name} (odometer count: {self.odometer_count})")
+            self.logger.error(f"Odometer count after load is {self.odometer_count}, which may mean the filamnet was not grabbed by the extruder. Attempting to unload.")
+            if self.extruder_obj.tool_stn_unload > 0:
+                self.afc.move_e_pos(-self.extruder_obj.tool_stn_unload, self.extruder_obj.tool_unload_speed, "CANVAS tool unload", wait_tool=True)
+
+            if self.tool_unload_lane_extra_distance > 0:
+                self.move_with_odometer(-self.tool_unload_lane_extra_distance, self.long_moves_speed)
+
+            self.disengage_motors(-1.0)
+            return
+        
+        # TODO: Maybe also check the pressure sensor?
         
         self.disengage_motors(1.0)
 
@@ -452,7 +462,7 @@ class AFCCanvasLane(AFCLane):
             self.move_with_odometer(-self.tool_unload_lane_extra_distance, self.long_moves_speed)
 
         if self.get_toolhead_pre_sensor_state():
-            raise Exception(f"CANVAS unload failed to clear the shared toolhead sensor for {self.name} after extruder move")
+            raise gcmd.error(f"CANVAS unload failed to clear the shared toolhead sensor for {self.name} after extruder move")
 
         self.loaded_to_hub = False
         self.disengage_motors(-1.0)

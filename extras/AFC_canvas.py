@@ -182,13 +182,9 @@ class afcCanvas(afcUnit):
         state = bool(state)
         if state and not self._tangle_state and self.pause_on_tangle:
             if self.function.is_printing():
-                self.logger.warning(
-                    "CANVAS tangle detected on unit {}".format(self.name)
-                )
-                self.afc.error.pause_resume.send_pause_command()
                 self.afc.error.AFC_error(
                     "CANVAS tangle detected on unit {}".format(self.name),
-                    pause=False,
+                    pause=True,
                 )
         self._tangle_state = state
 
