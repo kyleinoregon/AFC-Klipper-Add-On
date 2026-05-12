@@ -383,6 +383,9 @@ class AFCCanvasLane(AFCLane):
         finally:
             self.canvas_motor.drv8833_set_speed(0.0)
 
+    def _cutter_sensor_engaged(self):
+        return bool(getattr(self.unit_obj, "cutter_sensor_state", False))
+
     def cmd_AFC_CANVAS_TOOL_LOAD(self, gcmd):
         '''
         CANVAS-specific tool load command.
@@ -394,6 +397,9 @@ class AFCCanvasLane(AFCLane):
         '''
         self.select_lane()
         self.afc._check_extruder_temp(self)
+
+        if self._cutter_sensor_engaged():
+            self.logger.error(f"CANVAS tool load aborted because the cutter sensor is engaged")
 
         if self.afc.park:
             self.afc.gcode.run_script_from_command(

@@ -32,6 +32,7 @@ def _make_canvas_lane(name="lane1"):
     lane.unit_obj.select_lane = MagicMock()
     lane.unit_obj.move_to_hub = MagicMock(return_value=(True, 10.0, AFCMoveWarning.NONE))
     lane.unit_obj.lane_unloading = MagicMock()
+    lane.unit_obj.cutter_sensor_state = False
     lane.canvas_motor = MagicMock()
     lane.red_led_pin = MagicMock()
     lane.white_led_pin = MagicMock()
@@ -221,6 +222,22 @@ def test_custom_load_runs_hub_move_and_assisted_extruder_move():
     lane.afc.move_e_pos.assert_called_once_with(72.0, 25.0, "CANVAS tool stn", wait_tool=False)
     assert lane.loaded_to_hub is True
     assert lane.canvas_motor.drv8833_set_speed.call_args_list[-1] == call(0.0)
+
+
+def test_custom_load_stops_when_cutter_sensor_engages():
+    lane = _make_canvas_lane()
+    lane.get_toolhead_pre_sensor_state = MagicMock(return_value=False)
+
+    def pause_side_effect(until):
+        lane.unit_obj.cutter_sensor_state = True
+
+    lane.reactor.pause = MagicMock(side_effect=pause_side_effect)
+
+    AFCCanvasLane.cmd_AFC_CANVAS_TOOL_LOAD(lane, MagicMock())
+
+    lane.afc.move_e_pos.assert_not_called()
+    assert lane.canvas_motor.drv8833_set_speed.call_args_list[-1] == call(0.0)
+    assert lane.loaded_to_hub is False
 
 
 def test_custom_unload_runs_macros_then_retracts():

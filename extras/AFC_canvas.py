@@ -54,13 +54,28 @@ class afcCanvas(afcUnit):
         )
         self.pause_on_tangle = config.getboolean("pause_on_tangle", True)
         self.tangle_pin = config.get("tangle_pin", None)
+        self.toolhead_cover_pin = config.get("toolhead_cover_pin", None)
+        self.cutter_sensor_pin = config.get(
+            "cutter_sensor_pin", config.get("cutter_pin", None)
+        )
         self.enable_9v = self._setup_output_pin(config, config.get("enable_9v_pin", None))
         self.enable_24v = self._setup_output_pin(config, config.get("enable_24v_pin", None))
         self._tangle_state = False
+        self._front_cover_state = False
+        self.cutter_sensor_state = False
 
+        buttons = self.printer.load_object(config, "buttons")
         if self.tangle_pin is not None:
-            buttons = self.printer.load_object(config, "buttons")
             buttons.register_buttons([self.tangle_pin], self.tangle_callback)
+        if self.toolhead_cover_pin is not None:
+            buttons.register_buttons(
+                [self.toolhead_cover_pin], self.toolhead_cover_callback
+            )
+        if self.cutter_sensor_pin is not None:
+            buttons.register_buttons(
+                [self.cutter_sensor_pin], self.cutter_callback
+            )
+
 
     def handle_connect(self):
         super().handle_connect()
@@ -178,15 +193,25 @@ class afcCanvas(afcUnit):
         self.logger.debug(f"lane_illuminate_spool: {lane.name}")
         getattr(lane, "apply_canvas_led")(self.afc.led_spool_illum)
 
-    def tangle_callback(self, eventtime, state):
+    def _handle_pause_sensor(self, state, state_attr, sensor_name):
         state = bool(state)
-        if state and not self._tangle_state and self.pause_on_tangle:
+        previous_state = getattr(self, state_attr, False)
+        if state and not previous_state and self.pause_on_tangle:
             if self.function.is_printing():
                 self.afc.error.AFC_error(
-                    "CANVAS tangle detected on unit {}".format(self.name),
+                    "CANVAS {} detected on unit {}".format(sensor_name, self.name),
                     pause=True,
                 )
-        self._tangle_state = state
+        setattr(self, state_attr, state)
+
+    def tangle_callback(self, eventtime, state):
+        self._handle_pause_sensor(state, "_tangle_state", "tangle")
+
+    def toolhead_cover_callback(self, eventtime, state):
+        self._handle_pause_sensor(state, "_front_cover_state", "front cover")
+
+    def cutter_callback(self, eventtime, state):
+        self.cutter_sensor_state = bool(state)
 
     def system_Test(
         self,
