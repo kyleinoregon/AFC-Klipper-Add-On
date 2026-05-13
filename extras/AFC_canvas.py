@@ -37,21 +37,6 @@ class afcCanvas(afcUnit):
         self.type = config.get("type", "canvas")
         self.prep_distance = config.getfloat("prep_distance", self.short_move_dis)
         self.prep_speed = config.getfloat("prep_speed", self.short_moves_speed)
-        self.tool_load_sync_speed_offset = config.getfloat(
-            "tool_load_sync_speed_offset", 5.0
-        )
-        self.tool_unload_sync_speed_offset = config.getfloat(
-            "tool_unload_sync_speed_offset", 5.0
-        )
-        self.tool_unload_lane_extra_distance = config.getfloat(
-            "tool_unload_lane_extra_distance", self.short_move_dis
-        )
-        self.tool_unload_lane_extra_speed = config.getfloat(
-            "tool_unload_lane_extra_speed", self.short_moves_speed
-        )
-        self.tool_load_lane_extra_distance = config.getfloat(
-            "tool_load_lane_extra_distance", None
-        )
         self.pause_on_tangle = config.getboolean("pause_on_tangle", True)
         self.tangle_pin = config.get("tangle_pin", None)
         self.toolhead_cover_pin = config.get("toolhead_cover_pin", None)
