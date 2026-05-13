@@ -20,8 +20,6 @@ try:
         AFCHomingPoints,
         AFCLane,
         AFCMoveWarning,
-        MoveDirection,
-        SpeedMode,
     )
 except Exception:
     raise CONFIG_ERROR(
@@ -68,24 +66,6 @@ class AFCCanvasLane(AFCLane):
             buttons.register_buttons([self.odometer_pin], self.odometer_callback)
 
         self.disengage_distance = config.getfloat("disengage_distance", 1.0)
-        self.tool_load_sync_speed_offset = config.getfloat(
-            "tool_load_sync_speed_offset", None
-        )
-        self.tool_unload_sync_speed_offset = config.getfloat(
-            "tool_unload_sync_speed_offset", None
-        )
-        self.tool_unload_lane_extra_distance = config.getfloat(
-            "tool_unload_lane_extra_distance", None
-        )
-        self.tool_unload_lane_extra_speed = config.getfloat(
-            "tool_unload_lane_extra_speed", None
-        )
-        self.tool_load_lane_extra_distance = config.getfloat(
-            "tool_load_lane_extra_distance", None
-        )
-        self.tool_load_lane_extra_speed = config.getfloat(
-            "tool_load_lane_extra_speed", None
-        )
 
         if self.custom_load_cmd is None:
             self.custom_load_cmd = "AFC_CANVAS_TOOL_LOAD LANE={}".format(self.name)
@@ -155,31 +135,6 @@ class AFCCanvasLane(AFCLane):
                     registry.setdefault(alias, self)
                     break
 
-    def handle_unit_connect(self, unit_obj):
-        super().handle_unit_connect(unit_obj)
-        if self.tool_load_sync_speed_offset is None:
-            self.tool_load_sync_speed_offset = getattr(
-                unit_obj, "tool_load_sync_speed_offset", 5.0
-            )
-        if self.tool_unload_sync_speed_offset is None:
-            self.tool_unload_sync_speed_offset = getattr(
-                unit_obj, "tool_unload_sync_speed_offset", 5.0
-            )
-        if self.tool_unload_lane_extra_distance is None:
-            self.tool_unload_lane_extra_distance = getattr(
-                unit_obj,
-                "tool_unload_lane_extra_distance",
-                self.short_move_dis,
-            )
-        if self.tool_unload_lane_extra_speed is None:
-            self.tool_unload_lane_extra_speed = getattr(
-                unit_obj, "tool_unload_lane_extra_speed", self.short_moves_speed
-            )
-        if self.tool_load_lane_extra_distance is None:
-            self.tool_load_lane_extra_distance = getattr(
-                unit_obj, "tool_load_lane_extra_distance", None
-            )
-
     def move(self, distance, speed, accel, assist_active=False):
         self.unit_obj.select_lane(self)
         if distance == 0:
@@ -187,6 +142,7 @@ class AFCCanvasLane(AFCLane):
         self.canvas_motor.drv8833_move(speed, distance)
 
     def prep_callback(self, eventtime, state):
+        # TODO: This doesn't work all the time
         if not self._afc_prep_done:
             self._load_state = state
 
@@ -337,24 +293,6 @@ class AFCCanvasLane(AFCLane):
 
         return min(moved, target_distance)
 
-    def canvas_move_distance(self, distance, speed, chunk_size=None, stop_condition=None):
-        total = abs(distance)
-        moved = 0.0
-        if total == 0:
-            return moved
-        if chunk_size is None or chunk_size <= 0:
-            chunk_size = total
-        direction = 1.0 if distance >= 0 else -1.0
-        while moved < total:
-            if stop_condition is not None and stop_condition():
-                break
-            step = min(chunk_size, total - moved)
-            self.move(step * direction, speed, self.short_moves_accel, False)
-            moved += step
-            if stop_condition is not None and stop_condition():
-                break
-        return moved
-
     def _run_unload_macros(self):
         if self.afc.tool_cut:
             self.extruder_obj.estats.increase_cut_total()
@@ -387,14 +325,6 @@ class AFCCanvasLane(AFCLane):
         return bool(getattr(self.unit_obj, "cutter_sensor_state", False))
 
     def cmd_AFC_CANVAS_TOOL_LOAD(self, gcmd):
-        '''
-        CANVAS-specific tool load command.
-        Steps:
-        1. Run normal load macros (park, form tip, heat nozzle) if configured.
-        2. Move the canvas lane until the shared toolhead sensor is triggered, if not already.
-        3. Move the canvas lane by tool_load_lane_extra_distance if configured.
-        4. Check if the odometer has moved (if not, something went wrong).
-        '''
         self.select_lane()
         self.afc._check_extruder_temp(self)
 
@@ -421,9 +351,9 @@ class AFCCanvasLane(AFCLane):
             
         self.loaded_to_hub = True
 
-        if self.tool_load_lane_extra_distance is not None and self.tool_load_lane_extra_distance > 0:
-            self.afc.move_e_pos(self.tool_load_lane_extra_distance, self.extruder_obj.tool_load_speed, "CANVAS tool load extra move", wait_tool=False)
-            self.move(self.tool_load_lane_extra_distance, self.short_moves_speed, self.short_moves_accel)
+        if self.hub_obj and self.hub_obj.afc_bowden_length > 0:
+            self.afc.move_e_pos(self.hub_obj.afc_bowden_length, self.extruder_obj.tool_load_speed, "CANVAS tool load extra move", wait_tool=False)
+            self.move(self.hub_obj.afc_bowden_length, self.short_moves_speed, self.short_moves_accel)
 
         self.reset_odometer()
 
@@ -435,8 +365,8 @@ class AFCCanvasLane(AFCLane):
             if self.extruder_obj.tool_stn_unload > 0:
                 self.afc.move_e_pos(-self.extruder_obj.tool_stn_unload, self.extruder_obj.tool_unload_speed, "CANVAS tool unload", wait_tool=True)
 
-            if self.tool_unload_lane_extra_distance > 0:
-                self.move_with_odometer(-self.tool_unload_lane_extra_distance, self.long_moves_speed)
+            if self.hub_obj and self.hub_obj.afc_unload_bowden_length > 0:
+                self.move_with_odometer(-self.hub_obj.afc_unload_bowden_length, self.long_moves_speed)
 
             self.disengage_motors(-1.0)
             return
@@ -446,14 +376,6 @@ class AFCCanvasLane(AFCLane):
         self.disengage_motors(1.0)
 
     def cmd_AFC_CANVAS_TOOL_UNLOAD(self, gcmd):
-        '''
-        CANVAS-specific tool unload command.
-        Steps:
-        1. Run normal unload macros (tool cut, park, form tip) if configured.
-        2. Move the extruder back by tool_stn_unload distance if configured.
-        3. Move the canvas lane back by tool_sensor_after_extruder distance if configured.
-        4. Disengage the motors.
-        '''
         self.select_lane()
         self.afc._check_extruder_temp(self)
         self.disable_buffer()
@@ -463,9 +385,8 @@ class AFCCanvasLane(AFCLane):
         if self.extruder_obj.tool_stn_unload > 0:
             self.afc.move_e_pos(-self.extruder_obj.tool_stn_unload, self.extruder_obj.tool_unload_speed, "CANVAS tool unload", wait_tool=True)
 
-        # TODO: This needs a different var
-        if self.tool_unload_lane_extra_distance > 0:
-            self.move_with_odometer(-self.tool_unload_lane_extra_distance, self.long_moves_speed)
+        if self.hub_obj and self.hub_obj.afc_unload_bowden_length > 0:
+            self.move_with_odometer(-self.hub_obj.afc_unload_bowden_length, self.long_moves_speed)
 
         if self.get_toolhead_pre_sensor_state():
             raise gcmd.error(f"CANVAS unload failed to clear the shared toolhead sensor for {self.name} after extruder move")
@@ -480,10 +401,7 @@ class AFCCanvasLane(AFCLane):
         response["canvas_motor"] = self.drv8833_object_name
         response["odometer_count"] = self.odometer_count
         response["odometer_distance"] = self.get_odometer_distance()
-        response["tool_load_sync_speed_offset"] = self.tool_load_sync_speed_offset
-        response["tool_unload_sync_speed_offset"] = self.tool_unload_sync_speed_offset
         return response
-
 
 def load_config_prefix(config):
     return AFCCanvasLane(config)
