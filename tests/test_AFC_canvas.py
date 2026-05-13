@@ -3,7 +3,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from extras.AFC_canvas import afcCanvas
-from extras.AFC_lane import AFCMoveWarning, MoveDirection, SpeedMode
+from extras.AFC_lane import AFCMoveWarning, MoveDirection, SpeedMode, AFCHomingPoints
 from tests.conftest import MockAFC, MockLogger, MockPrinter, MockReactor
 
 
@@ -168,3 +168,48 @@ def test_move_to_hub_warns_when_sensor_never_triggers():
     assert success is False
     assert moved == 8.0
     assert warn == AFCMoveWarning.WARN
+
+
+def test_system_test_seeds_load_state_from_pressed_prep_endstop():
+    unit = _make_canvas_unit()
+    lane = _make_lane()
+    lane.prep_state = False
+    lane._load_state = False
+    lane._afc_prep_done = False
+    lane.name = "lane1"
+    lane.map = "T0"
+    lane.tool_loaded = False
+    lane.send_lane_data = MagicMock()
+    lane.do_enable = MagicMock()
+    lane.set_afc_prep_done = MagicMock()
+    lane.endstops = {
+        AFCHomingPoints.PREP: {"endstop": MagicMock(query_endstop=MagicMock(return_value=True))}
+    }
+
+    unit.system_Test(lane, delay=0.0, assignTcmd=False, enable_movement=False)
+
+    assert lane.prep_state is True
+    assert lane._load_state is True
+    lane.apply_canvas_led.assert_called_with(unit.afc.led_ready)
+    lane.set_afc_prep_done.assert_called_once_with()
+
+
+def test_system_test_falls_back_to_callback_state_without_prep_endstop():
+    unit = _make_canvas_unit()
+    lane = _make_lane()
+    lane.prep_state = False
+    lane._load_state = True
+    lane._afc_prep_done = False
+    lane.name = "lane1"
+    lane.map = "T0"
+    lane.tool_loaded = False
+    lane.send_lane_data = MagicMock()
+    lane.do_enable = MagicMock()
+    lane.set_afc_prep_done = MagicMock()
+    lane.endstops = {}
+
+    unit.system_Test(lane, delay=0.0, assignTcmd=False, enable_movement=False)
+
+    assert lane.prep_state is False
+    assert lane._load_state is False
+    lane.apply_canvas_led.assert_called_with(unit.afc.led_off)
