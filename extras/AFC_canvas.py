@@ -16,7 +16,13 @@ except Exception:
     )
 
 try:
-    from extras.AFC_lane import AFCMoveWarning, MoveDirection, SpeedMode, AFCLane
+    from extras.AFC_lane import (
+        AFCMoveWarning,
+        MoveDirection,
+        SpeedMode,
+        AFCHomingPoints,
+        AFCLane,
+    )
 except Exception:
     raise CONFIG_ERROR(
         ERROR_STR.format(import_lib="AFC_lane", trace=traceback.format_exc())
@@ -198,6 +204,24 @@ class afcCanvas(afcUnit):
     def cutter_callback(self, eventtime, state):
         self.cutter_sensor_state = bool(state)
 
+    def _get_startup_prep_state(self, lane: AFCLane) -> bool:
+        prep_state = bool(getattr(lane, "prep_state", False))
+        if getattr(lane, "_afc_prep_done", False):
+            return prep_state
+
+        endstop = lane.endstops.get(AFCHomingPoints.PREP, {}).get("endstop", None)
+        if endstop is None or not hasattr(endstop, "query_endstop"):
+            return prep_state
+
+        toolhead = self.printer.lookup_object("toolhead", None)
+        if toolhead is None or not hasattr(toolhead, "get_last_move_time"):
+            return prep_state
+
+        try:
+            return bool(endstop.query_endstop(toolhead.get_last_move_time()))
+        except Exception:
+            return prep_state
+
     def system_Test(
         self,
         cur_lane: AFCLane,
@@ -208,8 +232,11 @@ class afcCanvas(afcUnit):
         # For now, ignore movement checks
         msg = ""
         succeeded = True
+        prep_state = self._get_startup_prep_state(cur_lane)
+        cur_lane.prep_state = prep_state
+        cur_lane._load_state = prep_state
 
-        if not cur_lane.prep_state:
+        if not prep_state:
             self.lane_unloaded(cur_lane)
             msg = "EMPTY READY FOR SPOOL"
         else:
