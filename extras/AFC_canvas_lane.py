@@ -334,9 +334,9 @@ class AFCCanvasLane(AFCLane):
             self.canvas_motor.drv8833_set_speed(self.short_moves_speed)
             while not self.get_toolhead_pre_sensor_state():
                 now = self.reactor.monotonic()
-                if now - start > 15.0:
+                if now - start > 30.0:
                     self.canvas_motor.drv8833_set_speed(0.0)
-                    self.logger.error(f"CANVAS load failed to reach the shared toolhead sensor for {self.name} within 15 seconds.")
+                    self.logger.error(f"CANVAS load failed to reach the shared toolhead sensor for {self.name} within 30 seconds.")
                     return
                 self.reactor.pause(now + 0.005)
             
