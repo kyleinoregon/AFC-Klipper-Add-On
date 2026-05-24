@@ -181,11 +181,11 @@ class afcCanvas(afcUnit):
 
     def tangle_callback(self, eventtime, state):
         state = bool(state)
-        previous_state = getattr(self, "_tangle_state", False)
+        previous_state = self._tangle_state
         if state and not previous_state and self.pause_on_tangle:
             if self.function.is_printing():
                 self.afc.error.AFC_error(
-                    "CANVAS {} detected on unit {}".format("tangle", self.name),
+                    f"CANVAS tangle detected on unit {self.name}",
                     pause=True,
                 )
         self._tangle_state = state

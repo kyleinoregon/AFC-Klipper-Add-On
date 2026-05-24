@@ -329,44 +329,51 @@ class AFCCanvasLane(AFCLane):
                 "{} EXTRUDER={}".format(self.afc.park_cmd, self.extruder_obj.name)
             )
 
-        if not self.get_toolhead_pre_sensor_state():
+        load_tries = 3
+
+        for load_attempt in range(load_tries):
+            self.logger.info(f"Attempting CANVAS tool load for {self.name}, try {load_attempt+1}/{load_tries}")
+            if self.get_toolhead_pre_sensor_state():
+                return
+            
             start = self.reactor.monotonic()
             self.canvas_motor.drv8833_set_speed(self.short_moves_speed)
             while not self.get_toolhead_pre_sensor_state():
                 now = self.reactor.monotonic()
                 if now - start > 30.0:
                     self.canvas_motor.drv8833_set_speed(0.0)
-                    self.logger.error(f"CANVAS load failed to reach the shared toolhead sensor for {self.name} within 30 seconds.")
+                    self.logger.warning(f"CANVAS load failed to reach the shared toolhead sensor for {self.name} within 30 seconds.")
                     return
                 self.reactor.pause(now + 0.005)
             
             self.canvas_motor.drv8833_set_speed(0.0)
             
-        self.loaded_to_hub = True
+            self.loaded_to_hub = True
 
-        if self.hub_obj and self.hub_obj.afc_bowden_length > 0:
-            self.afc.move_e_pos(self.hub_obj.afc_bowden_length, self.extruder_obj.tool_load_speed, "CANVAS tool load extra move", wait_tool=False)
-            self.move(self.hub_obj.afc_bowden_length, self.short_moves_speed, self.short_moves_accel)
+            if self.hub_obj and self.hub_obj.afc_bowden_length > 0:
+                self.afc.move_e_pos(self.hub_obj.afc_bowden_length, self.extruder_obj.tool_load_speed, "CANVAS tool load extra move", wait_tool=False)
+                self.move(self.hub_obj.afc_bowden_length, self.short_moves_speed, self.short_moves_accel)
 
-        self.reset_odometer()
+            self.reset_odometer()
 
-        if self.extruder_obj.tool_stn > 0:
-            self.afc.move_e_pos(self.extruder_obj.tool_stn, self.extruder_obj.tool_load_speed, "CANVAS tool load", wait_tool=True)
+            if self.extruder_obj.tool_stn > 0:
+                self.afc.move_e_pos(self.extruder_obj.tool_stn, self.extruder_obj.tool_load_speed, "CANVAS tool load", wait_tool=True)
 
-        if self.odometer_count <= 5:
-            self.logger.error(f"Odometer count after load is {self.odometer_count}, which may mean the filamnet was not grabbed by the extruder. Attempting to unload.")
-            if self.extruder_obj.tool_stn_unload > 0:
-                self.afc.move_e_pos(-self.extruder_obj.tool_stn_unload, self.extruder_obj.tool_unload_speed, "CANVAS tool unload", wait_tool=True)
+            if self.odometer_count <= 5:
+                self.logger.warning(f"Odometer count after load is {self.odometer_count}, which may mean the filamnet was not grabbed by the extruder. Attempting to unload.")
+                if self.extruder_obj.tool_stn_unload > 0:
+                    self.afc.move_e_pos(-self.extruder_obj.tool_stn_unload, self.extruder_obj.tool_unload_speed, "CANVAS tool unload", wait_tool=True)
 
-            if self.hub_obj and self.hub_obj.afc_unload_bowden_length > 0:
-                self.move_with_odometer(-self.hub_obj.afc_unload_bowden_length, self.long_moves_speed)
+                if self.hub_obj and self.hub_obj.afc_unload_bowden_length > 0:
+                    self.move_with_odometer(-self.hub_obj.afc_unload_bowden_length, self.long_moves_speed)
 
-            self.disengage_motors(-1.0)
-            return
+                self.disengage_motors(-1.0)
+                continue
+            
+            self.disengage_motors(1.0)
+            break
         
         # TODO: Maybe also check the pressure sensor?
-        
-        self.disengage_motors(1.0)
 
     def cmd_AFC_CANVAS_TOOL_UNLOAD(self, gcmd):
         self.select_lane()
