@@ -409,12 +409,12 @@ class AFC_moonraker:
             logger = self.logger.debug
 
         try:
-            resp = urlopen(url_string)
-            if resp.status >= 200 and resp.status <= 300:
-                data = json.load(resp)
-            else:
-                logger(self.ERROR_STRING)
-                logger(f"Response: {resp.status} Reason: {resp.reason}")
+            with urlopen(url_string) as resp:
+                if resp.status >= 200 and resp.status <= 300:
+                    data = json.load(resp)
+                else:
+                    logger(self.ERROR_STRING)
+                    logger(f"Response: {resp.status} Reason: {resp.reason}")
         except:
             logger(self.ERROR_STRING, traceback=traceback.format_exc())
             data = None
@@ -638,7 +638,8 @@ class AFC_moonraker:
                 "key": key
             }
             req = Request( self.database_url, urlencode(payload).encode(), method="DELETE")
-            urlopen(req)
+            with urlopen(req):
+                pass
             self.logger.debug(f"Removing {key} from {namespace}")
         except HTTPError as e:
             self.logger.debug(
@@ -684,7 +685,6 @@ class AFC_moonraker:
             self.logger.debug(f"{e}")
             error = True
         return error
-
 class AFC_PrintFileMetaData:
     """
     Wraps moonraker's file metadata lookup for the file currently being printed,
