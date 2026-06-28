@@ -360,7 +360,7 @@ class AFCCanvasLane(AFCLane):
                 self.afc.move_e_pos(self.extruder_obj.tool_stn, self.extruder_obj.tool_load_speed, "CANVAS tool load", wait_tool=True)
 
             if self.odometer_count <= 5:
-                self.logger.warning(f"Odometer count after load is {self.odometer_count}, which may mean the filamnet was not grabbed by the extruder. Attempting to unload.")
+                self.logger.warning(f"Odometer count after load is {self.odometer_count}, which may mean the filament was not grabbed by the extruder. Attempting to unload.")
                 if self.extruder_obj.tool_stn_unload > 0:
                     self.afc.move_e_pos(-self.extruder_obj.tool_stn_unload, self.extruder_obj.tool_unload_speed, "CANVAS tool unload", wait_tool=True)
 
