@@ -377,7 +377,7 @@ class AFCCanvasLane(AFCLane):
 
             if self.hub_obj and self.hub_obj.afc_bowden_length > 0:
                 self._move_canvas_with_extruder_feed(
-                    self.hub_obj.afc_bowden_length,
+                    self.hub_obj.afc_bowden_length + load_attempt,
                     self.short_moves_speed,
                     self.extruder_obj.tool_load_speed,
                     "CANVAS tool load extra move",
