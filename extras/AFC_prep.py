@@ -19,6 +19,7 @@ class afcPrep:
         self.printer.register_event_handler("klippy:connect", self.handle_connect)
         self.delay              = config.getfloat('delay_time', 0.1, minval=0.0)                # Time to delay when moving extruders and spoolers during PREP routine
         self.enable             = config.getboolean("enable", False)                            # Set True to disable PREP checks
+        self.dis_pause_resume_macro = config.getboolean("disable_pause_resume_remapping", False) # Set to True to disable remapping PAUSE and RESUME macros to AFC macros
         self.dis_unload_macro   = config.getboolean("disable_unload_filament_remapping", False) # Set to True to disable remapping UNLOAD_FILAMENT macro to TOOL_UNLOAD macro
         self.get_td1_data       = config.getboolean("capture_td1_data", False)                  # Set to True to capture TD-1 data for all lanes during prep
 
@@ -47,8 +48,9 @@ class afcPrep:
         # Checking to see if rename has already been done, don't want to rename again if prep was already ran
         if not self.rename_occurred:
             self.rename_occurred = True
-            self.afc.function._rename(self.afc.error.BASE_RESUME_NAME, self.afc.error.AFC_RENAME_RESUME_NAME, self.afc.error.cmd_AFC_RESUME, self.afc.error.cmd_AFC_RESUME_help)
-            self.afc.function._rename(self.afc.error.BASE_PAUSE_NAME, self.afc.error.AFC_RENAME_PAUSE_NAME, self.afc.error.cmd_AFC_PAUSE, self.afc.error.cmd_AFC_RESUME_help)
+            if not self.dis_pause_resume_macro:
+                self.afc.function._rename(self.afc.error.BASE_RESUME_NAME, self.afc.error.AFC_RENAME_RESUME_NAME, self.afc.error.cmd_AFC_RESUME, self.afc.error.cmd_AFC_RESUME_help)
+                self.afc.function._rename(self.afc.error.BASE_PAUSE_NAME, self.afc.error.AFC_RENAME_PAUSE_NAME, self.afc.error.cmd_AFC_PAUSE, self.afc.error.cmd_AFC_RESUME_help)
 
             # Check to see if the user does not want to rename UNLOAD_FILAMENT macro
             if not self.dis_unload_macro:

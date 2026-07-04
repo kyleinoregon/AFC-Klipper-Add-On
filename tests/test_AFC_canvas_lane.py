@@ -105,7 +105,34 @@ def test_move_translates_signed_direction():
     AFCCanvasLane.move(lane, -12.0, 30.0, 400.0)
 
     lane.unit_obj.select_lane.assert_called_once_with(lane)
-    lane.canvas_motor.drv8833_move.assert_called_once_with(30.0, -12.0)
+    lane.canvas_motor.drv8833_move.assert_called_once_with(
+        30.0, -12.0, wait_for_completion=True
+    )
+
+
+def test_canvas_feed_keeps_extruder_moving_until_canvas_completes():
+    lane = _make_canvas_lane()
+    lane.canvas_motor.active = True
+
+    def move_e_side_effect(*args, **kwargs):
+        if lane.afc.move_e_pos.call_count >= 3:
+            lane.canvas_motor.active = False
+
+    lane.afc.move_e_pos.side_effect = move_e_side_effect
+
+    AFCCanvasLane._move_canvas_with_extruder_feed(
+        lane, 12.0, 20.0, 25.0, "CANVAS tool load extra move"
+    )
+
+    lane.canvas_motor.drv8833_move.assert_called_once_with(
+        20.0, 12.0, wait_for_completion=False
+    )
+    assert lane.afc.move_e_pos.call_args_list == [
+        call(1.0, 25.0, "CANVAS tool load extra move", wait_tool=True),
+        call(1.0, 25.0, "CANVAS tool load extra move", wait_tool=True),
+        call(1.0, 25.0, "CANVAS tool load extra move", wait_tool=True),
+    ]
+    lane.canvas_motor.drv8833_set_speed.assert_called_once_with(0.0)
 
 
 def test_do_enable_false_stops_motor():

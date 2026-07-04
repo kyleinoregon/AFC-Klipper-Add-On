@@ -31,6 +31,7 @@ class AFCCanvasLane(AFCLane):
     cmd_AFC_CANVAS_TOOL_LOAD_help = "CANVAS-specific tool load for a lane"
     cmd_AFC_CANVAS_TOOL_UNLOAD_help = "CANVAS-specific tool unload for a lane"
     DEFAULT_ODOMETER_POLL_INTERVAL = 0.05
+    DEFAULT_EXTRUDER_FEED_CHUNK = 1.0
     GPIO_PIN_MIN_TIME = 2
 
     def __init__(self, config):
@@ -135,11 +136,13 @@ class AFCCanvasLane(AFCLane):
                     registry.setdefault(alias, self)
                     break
 
-    def move(self, distance, speed, accel, assist_active=False):
+    def move(self, distance, speed, accel, assist_active=False, wait_for_completion=True):
         self.unit_obj.select_lane(self)
         if distance == 0:
             return
-        self.canvas_motor.drv8833_move(speed, distance)
+        self.canvas_motor.drv8833_move(
+            speed, distance, wait_for_completion=wait_for_completion
+        )
 
     def do_enable(self, enable):
         if not enable:
@@ -314,6 +317,27 @@ class AFCCanvasLane(AFCLane):
         finally:
             self.canvas_motor.drv8833_set_speed(0.0)
 
+    def _move_canvas_with_extruder_feed(
+        self, distance, canvas_speed, extruder_speed, label
+    ):
+        if distance == 0:
+            return
+
+        feed_direction = 1.0 if distance >= 0 else -1.0
+        feed_chunk = self.DEFAULT_EXTRUDER_FEED_CHUNK * feed_direction
+
+        try:
+            self.move(
+                distance,
+                canvas_speed,
+                self.short_moves_accel,
+                wait_for_completion=False,
+            )
+            while self.canvas_motor.active:
+                self.afc.move_e_pos(feed_chunk, extruder_speed, label, wait_tool=True)
+        finally:
+            self.canvas_motor.drv8833_set_speed(0.0)
+
     def _cutter_sensor_engaged(self):
         return bool(getattr(self.unit_obj, "cutter_sensor_state", False))
 
@@ -323,6 +347,7 @@ class AFCCanvasLane(AFCLane):
 
         if self._cutter_sensor_engaged():
             self.logger.error(f"CANVAS tool load aborted because the cutter sensor is engaged")
+            return
 
         if self.afc.park:
             self.afc.gcode.run_script_from_command(
@@ -351,8 +376,12 @@ class AFCCanvasLane(AFCLane):
             self.loaded_to_hub = True
 
             if self.hub_obj and self.hub_obj.afc_bowden_length > 0:
-                self.afc.move_e_pos(self.hub_obj.afc_bowden_length, self.extruder_obj.tool_load_speed, "CANVAS tool load extra move", wait_tool=False)
-                self.move(self.hub_obj.afc_bowden_length, self.short_moves_speed, self.short_moves_accel)
+                self._move_canvas_with_extruder_feed(
+                    self.hub_obj.afc_bowden_length,
+                    self.short_moves_speed,
+                    self.extruder_obj.tool_load_speed,
+                    "CANVAS tool load extra move",
+                )
 
             self.reset_odometer()
 
