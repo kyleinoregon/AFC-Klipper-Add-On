@@ -36,6 +36,7 @@ def _make_prep(values=None):
     prep.logger = afc.logger
     prep.delay = 0.1
     prep.enable = False
+    prep.dis_pause_resume_macro = False
     prep.dis_unload_macro = False
     prep.get_td1_data = False
     prep.rename_occurred = False
@@ -112,6 +113,22 @@ class TestRenameMacros:
         prep._rename_macros()
         # Expect only 2 renames: RESUME + PAUSE
         assert prep.afc.function._rename.call_count == 2
+
+    def test_pause_resume_not_renamed_when_disabled(self):
+        prep = _make_prep({"dis_pause_resume_macro": True})
+        self._setup_error_obj(prep)
+        prep.afc.BASE_UNLOAD_FILAMENT = "UNLOAD_FILAMENT"
+        prep.afc.RENAMED_UNLOAD_FILAMENT = "_AFC_RENAMED_UNLOAD_FILAMENT_"
+        prep.afc.cmd_TOOL_UNLOAD = MagicMock()
+        prep.afc.cmd_TOOL_UNLOAD_help = "help"
+        prep.afc.function._rename = MagicMock()
+        prep._rename_macros()
+        prep.afc.function._rename.assert_called_once_with(
+            "UNLOAD_FILAMENT",
+            "_AFC_RENAMED_UNLOAD_FILAMENT_",
+            prep.afc.cmd_TOOL_UNLOAD,
+            "help",
+        )
     
     def test_rename_occurred(self):
         prep = _make_prep({"rename_occurred": True})
