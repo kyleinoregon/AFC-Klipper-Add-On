@@ -85,6 +85,54 @@ class TestStateConstants:
         assert f"{State.TOOL_DOCK}" == "ToolDock"
 
 
+# ── load_sequence: custom command error-state guards ──────────────────────────────────
+
+class TestLoadSequenceCustomCommandErrorState:
+    @staticmethod
+    def _make_custom_load():
+        obj = _make_afc()
+        obj.gcode = MagicMock()
+        obj.error = MagicMock()
+        obj.logger = MagicMock()
+
+        lane = MagicMock()
+        lane.name = "lane1"
+        lane.custom_load_cmd = "CUSTOM_LOAD LANE=lane1"
+        lane.status = AFCLaneState.LOADED
+        return obj, lane
+
+    @staticmethod
+    def _assert_state_commands(message):
+        assert "AFC_RECOVER_LANE LANE=lane1" in message
+        assert "SET_LANE_LOADED LANE=lane1" in message
+
+    def test_refuses_custom_load_when_lane_already_in_error(self):
+        obj, lane = self._make_custom_load()
+        lane.status = AFCLaneState.ERROR
+
+        result = obj.load_sequence(lane, MagicMock(), MagicMock())
+
+        assert result is False
+        obj.gcode.run_script_from_command.assert_not_called()
+        obj.error.AFC_error.assert_called_once()
+        assert obj.error.AFC_error.call_args.kwargs["pause"] is False
+        self._assert_state_commands(obj.error.AFC_error.call_args.args[0])
+
+    def test_warns_and_stops_when_custom_load_sets_error(self):
+        obj, lane = self._make_custom_load()
+        obj.gcode.run_script_from_command.side_effect = (
+            lambda _command: setattr(lane, "status", AFCLaneState.ERROR)
+        )
+
+        result = obj.load_sequence(lane, MagicMock(), MagicMock())
+
+        assert result is False
+        obj.gcode.run_script_from_command.assert_called_once_with(lane.custom_load_cmd)
+        lane.get_toolhead_pre_sensor_state.assert_not_called()
+        obj.logger.warning.assert_called_once()
+        self._assert_state_commands(obj.logger.warning.call_args.args[0])
+
+
 # ── AFC_VERSION ───────────────────────────────────────────────────────────────
 
 class TestAfcVersion:

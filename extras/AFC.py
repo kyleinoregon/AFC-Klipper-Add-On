@@ -1626,9 +1626,25 @@ class afc:
 
         # Placeholder for custom load sequence
         if cur_lane.custom_load_cmd:
+            load_state_commands = (
+                f"\nSet the lane as unloaded with:\nAFC_RECOVER_LANE LANE={cur_lane.name}"
+                f"\nOr set the lane as loaded with:\nSET_LANE_LOADED LANE={cur_lane.name}"
+            )
+            if cur_lane.status == AFCLaneState.ERROR:
+                message = f"Cannot load lane {cur_lane.name}: lane is in an error state."
+                self.error.AFC_error(message + load_state_commands, pause=False)
+                return False
+
             self.logger.info("Running custom load command for lane {}".format(cur_lane.name))
 
             self.gcode.run_script_from_command(cur_lane.custom_load_cmd)
+            if cur_lane.status == AFCLaneState.ERROR:
+                message = (
+                    f"Custom load command for lane {cur_lane.name} left the lane in an error state."
+                )
+                self.logger.warning(message + load_state_commands)
+                return False
+
             if cur_lane.get_toolhead_pre_sensor_state():
                 cur_lane.status = AFCLaneState.TOOL_LOADED
                 self.save_vars()

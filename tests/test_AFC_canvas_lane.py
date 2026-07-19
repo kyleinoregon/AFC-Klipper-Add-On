@@ -3,8 +3,8 @@ from __future__ import annotations
 from unittest.mock import MagicMock, call
 
 from extras.AFC_canvas_lane import AFCCanvasLane
-from extras.AFC_lane import AFCHomingPoints, AFCMoveWarning, SpeedMode
-from tests.conftest import MockAFC, MockLogger, MockPrinter, MockReactor
+from extras.AFC_lane import AFCHomingPoints, AFCLane, AFCMoveWarning, SpeedMode
+from tests.conftest import MockAFC, MockConfig, MockLogger, MockPrinter, MockReactor
 
 
 def _make_canvas_lane(name="lane1"):
@@ -71,6 +71,9 @@ def _make_canvas_lane(name="lane1"):
     lane.odometer_count = 0
     lane.last_odometer_eventtime = None
     lane.odometer_poll_interval = AFCCanvasLane.DEFAULT_ODOMETER_POLL_INTERVAL
+    lane.odometer_load_threshold = AFCCanvasLane.DEFAULT_ODOMETER_LOAD_THRESHOLD
+    lane.load_to_toolhead_timeout = AFCCanvasLane.DEFAULT_LOAD_TO_TOOLHEAD_TIMEOUT
+    lane.extruder_feed_timeout = AFCCanvasLane.DEFAULT_EXTRUDER_FEED_TIMEOUT
     lane.odometer_mm_per_pulse = 0.5
     lane.drv8833_object_name = "drv8833 lane1"
     lane.connect_done = True
@@ -97,6 +100,56 @@ def _make_canvas_lane(name="lane1"):
     lane.buffer_status = MagicMock(return_value=None)
     lane._set_gpio_pin = AFCCanvasLane._set_gpio_pin.__get__(lane, AFCCanvasLane)
     return lane
+
+
+def _make_configured_canvas_lane(monkeypatch, **config_values):
+    afc = MockAFC()
+    printer = MockPrinter(afc=afc)
+    printer._objects["drv8833 motor"] = MagicMock()
+
+    def mock_lane_init(lane, config):
+        lane.printer = printer
+        lane.afc = afc
+        lane.name = "lane1"
+        lane.fullname = "AFC_canvas_lane lane1"
+        lane.custom_load_cmd = None
+        lane.custom_unload_cmd = None
+
+    monkeypatch.setattr(AFCLane, "__init__", mock_lane_init)
+    values = {"drv8833": "motor"}
+    values.update(config_values)
+    config = MockConfig(name="AFC_canvas_lane lane1", printer=printer, values=values)
+    return AFCCanvasLane(config)
+
+
+def test_odometer_load_threshold_defaults_to_three(monkeypatch):
+    lane = _make_configured_canvas_lane(monkeypatch)
+
+    assert lane.odometer_load_threshold == 3
+
+
+def test_odometer_load_threshold_is_configurable(monkeypatch):
+    lane = _make_configured_canvas_lane(monkeypatch, odometer_load_threshold=7)
+
+    assert lane.odometer_load_threshold == 7
+
+
+def test_canvas_load_timeouts_have_expected_defaults(monkeypatch):
+    lane = _make_configured_canvas_lane(monkeypatch)
+
+    assert lane.load_to_toolhead_timeout == 30.0
+    assert lane.extruder_feed_timeout == 10.0
+
+
+def test_canvas_load_timeouts_are_configurable(monkeypatch):
+    lane = _make_configured_canvas_lane(
+        monkeypatch,
+        load_to_toolhead_timeout=45.0,
+        extruder_feed_timeout=15.0,
+    )
+
+    assert lane.load_to_toolhead_timeout == 45.0
+    assert lane.extruder_feed_timeout == 15.0
 
 
 def test_move_translates_signed_direction():
