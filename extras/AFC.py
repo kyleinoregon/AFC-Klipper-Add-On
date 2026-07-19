@@ -1434,7 +1434,7 @@ class afc:
         # Placeholder for custom load sequence
         if cur_lane.custom_load_cmd:
             load_state_commands = (
-                f"\nSet the lane as unloaded with:\nAFC_RECOVER_LANE LANE={cur_lane.name}"
+                f"\nSet the lane as unloaded with:\nUNSET_LANE_LOADED LANE={cur_lane.name}"
                 f"\nOr set the lane as loaded with:\nSET_LANE_LOADED LANE={cur_lane.name}"
             )
             if cur_lane.status == AFCLaneState.ERROR:
