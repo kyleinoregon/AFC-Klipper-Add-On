@@ -43,20 +43,14 @@ class afcCanvas(afcUnit):
         self.type = config.get("type", "canvas")
         self.prep_distance = config.getfloat("prep_distance", self.short_move_dis)
         self.prep_speed = config.getfloat("prep_speed", self.short_moves_speed)
-        self.pause_on_tangle = config.getboolean("pause_on_tangle", True)
-        self.tangle_pin = config.get("tangle_pin", None)
         self.cutter_sensor_pin = config.get(
             "cutter_sensor_pin", config.get("cutter_pin", None)
         )
         self.enable_9v = self._setup_output_pin(config, config.get("enable_9v_pin", None))
         self.enable_24v = self._setup_output_pin(config, config.get("enable_24v_pin", None))
-        self._tangle_state = False
-        self._front_cover_state = False
         self.cutter_sensor_state = False
 
         buttons = self.printer.load_object(config, "buttons")
-        if self.tangle_pin is not None:
-            buttons.register_buttons([self.tangle_pin], self.tangle_callback)
         if self.cutter_sensor_pin is not None:
             buttons.register_buttons(
                 [self.cutter_sensor_pin], self.cutter_callback
@@ -178,17 +172,6 @@ class afcCanvas(afcUnit):
     def lane_illuminate_spool(self, lane):
         self.logger.debug(f"lane_illuminate_spool: {lane.name}")
         getattr(lane, "apply_canvas_led")(self.afc.led_spool_illum)
-
-    def tangle_callback(self, eventtime, state):
-        state = bool(state)
-        previous_state = self._tangle_state
-        if state and not previous_state and self.pause_on_tangle:
-            if self.function.is_printing():
-                self.afc.error.AFC_error(
-                    f"CANVAS tangle detected on unit {self.name}",
-                    pause=True,
-                )
-        self._tangle_state = state
 
     def cutter_callback(self, eventtime, state):
         self.cutter_sensor_state = bool(state)

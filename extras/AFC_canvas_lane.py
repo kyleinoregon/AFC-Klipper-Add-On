@@ -367,7 +367,7 @@ class AFCCanvasLane(AFCLane):
         self.afc._check_extruder_temp(self)
 
         if self._cutter_sensor_engaged():
-            self.logger.error(f"CANVAS tool load aborted because the cutter sensor is engaged")
+            self.afc.error.handle_lane_failure(self, "CANVAS tool load failed: cutter sensor is engaged.")
             return
 
         if self.afc.park:
@@ -459,8 +459,6 @@ class AFCCanvasLane(AFCLane):
 
         # Failure case
         self.afc.error.handle_lane_failure(self, f"CANVAS tool load failed after {self.load_attempts} attempts.")
-        
-        # TODO: Maybe also check the pressure sensor?
 
     def cmd_AFC_CANVAS_TOOL_UNLOAD(self, gcmd):
         self.select_lane()

@@ -32,12 +32,9 @@ def _make_canvas_unit(name="CANVAS_1"):
     unit.tool_unload_sync_speed_offset = 6.0
     unit.tool_unload_lane_extra_distance = 7.0
     unit.tool_unload_lane_extra_speed = 12.0
-    unit.pause_on_tangle = True
-    unit._front_cover_state = False
     unit.cutter_sensor_state = False
     unit.enable_9v = None
     unit.enable_24v = None
-    unit._tangle_state = False
     return unit
 
 
@@ -99,28 +96,6 @@ def test_led_callbacks_use_canvas_led_outputs():
     lane.apply_canvas_led.assert_any_call(unit.afc.led_ready)
     lane.extruder_obj.set_status_led.assert_any_call(unit.afc.led_tool_loaded)
     lane.extruder_obj.set_status_led.assert_any_call(unit.afc.led_tool_unloaded)
-
-
-def test_tangle_callback_pauses_while_printing():
-    unit = _make_canvas_unit()
-    unit.afc.function.is_printing.return_value = True
-
-    unit.tangle_callback(10.0, True)
-
-    unit.afc.error.AFC_error.assert_called_once_with(
-        "CANVAS tangle detected on unit CANVAS_1", pause=True
-    )
-
-
-def test_front_cover_callback_pauses_while_printing():
-    unit = _make_canvas_unit()
-    unit.afc.function.is_printing.return_value = True
-
-    unit.toolhead_cover_callback(10.0, True)
-
-    unit.afc.error.AFC_error.assert_called_once_with(
-        "CANVAS front cover detected on unit CANVAS_1", pause=True
-    )
 
 
 def test_cutter_callback_updates_sensor_state():
