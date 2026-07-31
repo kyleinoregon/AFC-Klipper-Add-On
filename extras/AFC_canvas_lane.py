@@ -35,6 +35,8 @@ class AFCCanvasLane(AFCLane):
     DEFAULT_EXTRUDER_FEED_CHUNK = 1.0
     DEFAULT_LOAD_TO_TOOLHEAD_TIMEOUT = 30.0
     DEFAULT_EXTRUDER_FEED_TIMEOUT = 10.0
+    DEFAULT_LOAD_ATTEMPTS = 3
+    DEFAULT_LOAD_RECOVERY_RETRACT_DISTANCE = 10.0
     GPIO_PIN_MIN_TIME = 2
 
     def __init__(self, config):
@@ -57,8 +59,8 @@ class AFCCanvasLane(AFCLane):
         self.red_led_pin = self._setup_led_pin(pins, config.get("led_red_pin", None))
         self.white_led_pin = self._setup_led_pin(pins, config.get("led_white_pin", None))
 
-        self.odometer_pin = config.get("odometer_pin", None)
-        self.odometer_mm_per_pulse = config.getfloat("odometer_resolution", None)
+        self.odometer_pin = config.get("odometer_pin")
+        self.odometer_mm_per_pulse = config.getfloat("odometer_resolution", minval=0.0)
         self.odometer_poll_interval = config.getfloat(
             "odometer_poll_interval", self.DEFAULT_ODOMETER_POLL_INTERVAL, minval=0.01
         )
@@ -70,6 +72,14 @@ class AFCCanvasLane(AFCLane):
         )
         self.extruder_feed_timeout = config.getfloat(
             "extruder_feed_timeout", self.DEFAULT_EXTRUDER_FEED_TIMEOUT, minval=0.1
+        )
+        self.load_attempts = config.getint(
+            "load_attempts", self.DEFAULT_LOAD_ATTEMPTS, minval=1
+        )
+        self.load_recovery_retract_distance = config.getfloat(
+            "load_recovery_retract_distance",
+            self.DEFAULT_LOAD_RECOVERY_RETRACT_DISTANCE,
+            minval=0.0,
         )
         self.odometer_count = 0
         self.last_odometer_eventtime = None
@@ -256,13 +266,6 @@ class AFCCanvasLane(AFCLane):
         if target_distance == 0:
             return 0.0
 
-        if self.odometer_mm_per_pulse is None:
-            raise CONFIG_ERROR(
-                "odometer_mm_per_pulse must be configured for {} to use move_with_odometer".format(
-                    self.name
-                )
-            )
-
         signed_speed = abs(speed) if distance >= 0 else -abs(speed)
         moved = 0.0
         timeout = (target_distance / max(abs(speed), 1.0)) * 5.0 + 1.0
@@ -372,30 +375,37 @@ class AFCCanvasLane(AFCLane):
                 "{} EXTRUDER={}".format(self.afc.park_cmd, self.extruder_obj.name)
             )
 
-        load_tries = 3
-
-        for load_attempt in range(load_tries):
-            self.logger.info(f"Attempting CANVAS tool load for {self.name}, try {load_attempt+1}/{load_tries}")
+        for load_attempt in range(self.load_attempts):
+            self.logger.info(f"Attempting CANVAS tool load for {self.name}, try {load_attempt+1}/{self.load_attempts}")
             if self.get_toolhead_pre_sensor_state():
                 return
             
             start = self.reactor.monotonic()
             self.canvas_motor.drv8833_set_speed(self.short_moves_speed)
+            toolhead_sensor_load_fail = False
             while not self.get_toolhead_pre_sensor_state():
                 now = self.reactor.monotonic()
                 if now - start > self.load_to_toolhead_timeout:
                     self.canvas_motor.drv8833_set_speed(0.0)
-                    message = (
-                        "CANVAS load failed to reach the shared toolhead sensor within "
-                        f"{self.load_to_toolhead_timeout:g} seconds. Check the extruder "
-                        "and CANVAS lane before retrying."
-                    )
-                    self.afc.error.handle_lane_failure(self, message)
-                    return
+                    self.logger.warning("CANVAS tool load timed out while moving filament to the extruder. Attempting recovery.")
+                    toolhead_sensor_load_fail = True
+
+                    try:
+                        self.move_with_odometer(
+                            -self.load_recovery_retract_distance,
+                            self.long_moves_speed,
+                        )
+                    except:
+                        self.logger.warning("CANVAS tool load recovery failed while retracting filament to the hub using the odometer.")
+
+                    break
+                    
                 self.reactor.pause(now + 0.005)
+
+            if toolhead_sensor_load_fail:
+                continue
             
             self.canvas_motor.drv8833_set_speed(0.0)
-            
             self.loaded_to_hub = True
 
             if self.hub_obj and self.hub_obj.afc_bowden_length > 0:
@@ -407,12 +417,19 @@ class AFCCanvasLane(AFCLane):
                         "CANVAS tool load extra move",
                     )
                 except TimeoutError:
-                    message = (
-                        "CANVAS tool load timed out while moving filament from the hub "
-                        "to the extruder. Check the extruder and CANVAS lane before retrying."
-                    )
-                    self.afc.error.handle_lane_failure(self, message)
-                    return
+                    self.logger.warning("CANVAS tool load timed out while moving filament from the hub to the extruder. Attempting recovery.")
+                    self.disengage_motors(1.0)
+                    self.afc.move_e_pos(-(self.hub_obj.afc_bowden_length + load_attempt), self.extruder_obj.tool_load_speed, "CANVAS tool load recovery retract", wait_tool=True)
+
+                    try:
+                        self.move_with_odometer(
+                            -self.load_recovery_retract_distance,
+                            self.long_moves_speed,
+                        )
+                    except:
+                        self.logger.warning("CANVAS tool load recovery failed while retracting filament to the hub using the odometer.")
+
+                    continue
 
             self.reset_odometer()
 
@@ -431,20 +448,17 @@ class AFCCanvasLane(AFCLane):
                             -self.hub_obj.afc_unload_bowden_length,
                             self.long_moves_speed,
                         )
-                    except (CONFIG_ERROR, TimeoutError):
-                        message = (
-                            "CANVAS tool load recovery failed while retracting filament "
-                            "to the hub using the odometer. Check the extruder and CANVAS "
-                            "lane before retrying."
-                        )
-                        self.afc.error.handle_lane_failure(self, message)
-                        return
+                    except TimeoutError:
+                        self.logger.warning("CANVAS tool load recovery failed while retracting filament to the hub using the odometer.")
 
                 self.disengage_motors(-1.0)
                 continue
             
             self.disengage_motors(1.0)
-            break
+            return # Success
+
+        # Failure case
+        self.afc.error.handle_lane_failure(self, f"CANVAS tool load failed after {self.load_attempts} attempts.")
         
         # TODO: Maybe also check the pressure sensor?
 
@@ -454,29 +468,39 @@ class AFCCanvasLane(AFCLane):
         self.disable_buffer()
         self.unit_obj.lane_unloading(self)
         self._run_unload_macros()
-
-        if self.extruder_obj.tool_stn_unload > 0:
-            self.afc.move_e_pos(-self.extruder_obj.tool_stn_unload, self.extruder_obj.tool_unload_speed, "CANVAS tool unload", wait_tool=True)
-
-        if self.hub_obj and self.hub_obj.afc_unload_bowden_length > 0:
+        for attempt in range(self.load_attempts):
+            self.logger.info(f"Attempting CANVAS tool unload for {self.name}, try {attempt+1}/{self.load_attempts}")
+            failed_operation = "toolhead gear retract"
             try:
-                self.move_with_odometer(
-                    -self.hub_obj.afc_unload_bowden_length,
-                    self.long_moves_speed,
-                )
-            except (CONFIG_ERROR, TimeoutError):
-                message = (
-                    "CANVAS tool unload failed while retracting filament to the hub "
-                    "using the odometer. Check the extruder and CANVAS lane before retrying."
-                )
-                self.afc.error.handle_lane_failure(self, message)
-                return
+                if self.extruder_obj.tool_stn_unload > 0:
+                    self.afc.move_e_pos(
+                        -self.extruder_obj.tool_stn_unload,
+                        self.extruder_obj.tool_unload_speed,
+                        "CANVAS tool unload",
+                        wait_tool=True,
+                    )
 
-        if self.get_toolhead_pre_sensor_state():
-            raise gcmd.error(f"CANVAS unload failed to clear the shared toolhead sensor for {self.name} after extruder move")
+                failed_operation = "Canvas-unit retract"
+                if self.hub_obj and self.hub_obj.afc_unload_bowden_length > 0:
+                    self.move_with_odometer(
+                        -self.hub_obj.afc_unload_bowden_length,
+                        self.long_moves_speed,
+                    )
 
-        self.loaded_to_hub = False
-        self.disengage_motors(-1.0)
+                failed_operation = "check toolhead sensor"
+                if self.get_toolhead_pre_sensor_state():
+                    raise TimeoutError(
+                        "CANVAS tool unload failed to clear the shared toolhead sensor after extruder retract"
+                    )
+
+                self.loaded_to_hub = False
+                self.disengage_motors(-1.0)
+                return  # Success
+            except TimeoutError as error:
+                self.logger.warning(f"CANVAS tool unload failed during {failed_operation}: {error}.")
+
+        # Failure case
+        self.afc.error.handle_lane_failure(self, f"CANVAS tool unload failed after {self.load_attempts} attempts.")
 
     def get_status(self, eventtime=None, save_to_file=False):
         response = super().get_status(eventtime=eventtime, save_to_file=save_to_file)

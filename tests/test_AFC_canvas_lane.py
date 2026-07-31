@@ -74,6 +74,8 @@ def _make_canvas_lane(name="lane1"):
     lane.odometer_load_threshold = AFCCanvasLane.DEFAULT_ODOMETER_LOAD_THRESHOLD
     lane.load_to_toolhead_timeout = AFCCanvasLane.DEFAULT_LOAD_TO_TOOLHEAD_TIMEOUT
     lane.extruder_feed_timeout = AFCCanvasLane.DEFAULT_EXTRUDER_FEED_TIMEOUT
+    lane.load_attempts = AFCCanvasLane.DEFAULT_LOAD_ATTEMPTS
+    lane.load_recovery_retract_distance = AFCCanvasLane.DEFAULT_LOAD_RECOVERY_RETRACT_DISTANCE
     lane.odometer_mm_per_pulse = 0.5
     lane.drv8833_object_name = "drv8833 lane1"
     lane.connect_done = True
@@ -116,7 +118,11 @@ def _make_configured_canvas_lane(monkeypatch, **config_values):
         lane.custom_unload_cmd = None
 
     monkeypatch.setattr(AFCLane, "__init__", mock_lane_init)
-    values = {"drv8833": "motor"}
+    values = {
+        "drv8833": "motor",
+        "odometer_pin": "PA0",
+        "odometer_resolution": 0.5,
+    }
     values.update(config_values)
     config = MockConfig(name="AFC_canvas_lane lane1", printer=printer, values=values)
     return AFCCanvasLane(config)
@@ -150,6 +156,24 @@ def test_canvas_load_timeouts_are_configurable(monkeypatch):
 
     assert lane.load_to_toolhead_timeout == 45.0
     assert lane.extruder_feed_timeout == 15.0
+
+
+def test_canvas_load_recovery_defaults(monkeypatch):
+    lane = _make_configured_canvas_lane(monkeypatch)
+
+    assert lane.load_attempts == 3
+    assert lane.load_recovery_retract_distance == 10.0
+
+
+def test_canvas_load_recovery_is_configurable(monkeypatch):
+    lane = _make_configured_canvas_lane(
+        monkeypatch,
+        load_attempts=5,
+        load_recovery_retract_distance=18.5,
+    )
+
+    assert lane.load_attempts == 5
+    assert lane.load_recovery_retract_distance == 18.5
 
 
 def test_move_translates_signed_direction():
