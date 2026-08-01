@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import traceback
+from typing import Any, Optional
 
 import configfile
 
@@ -38,6 +39,7 @@ class AFCCanvasLane(AFCLane):
     DEFAULT_LOAD_ATTEMPTS = 3
     DEFAULT_LOAD_RECOVERY_RETRACT_DISTANCE = 30.0
     GPIO_PIN_MIN_TIME = 2
+    LED_PWM_CYCLE_TIME = 0.01
 
     def __init__(self, config):
         super().__init__(config)
@@ -113,27 +115,46 @@ class AFCCanvasLane(AFCLane):
         self._register_frontend_compat_aliases()
         self._load_state = False
 
-    def _setup_led_pin(self, pins, pin_name):
+    def _setup_led_pin(
+        self,
+        pins: Any,
+        pin_name: Optional[str],
+    ) -> Optional[Any]:
+        """
+        Configure a CANVAS LED pin as a PWM output.
+
+        :param pins: Klipper pin manager
+        :param pin_name: MCU pin name, or None when the LED is not configured
+        :return Any: configured PWM pin, or None when no pin was supplied
+        """
         if pin_name is None:
             return None
-        pin = pins.setup_pin("digital_out", pin_name)
+        pin = pins.setup_pin("pwm", pin_name)
+        pin.setup_cycle_time(self.LED_PWM_CYCLE_TIME, False)
         pin.setup_start_value(0.0, 0.0)
         pin.setup_max_duration(0.0)
         pin.last_set_time = 0.0
         return pin
 
-    def _set_gpio_pin(self, pin, enabled):
+    def _set_gpio_pin(self, pin: Optional[Any], value: float) -> None:
+        """
+        Set a CANVAS LED PWM duty cycle.
+
+        :param pin: configured PWM pin, or None when the LED is unavailable
+        :param value: PWM duty cycle between zero and one
+        """
         if pin is None:
             return
-        
-        print_time = pin.get_mcu().estimated_print_time(self.reactor.monotonic()) + pin.get_mcu().min_schedule_time() + 0.1
+
+        mcu = pin.get_mcu()
+        print_time = (
+            mcu.estimated_print_time(self.reactor.monotonic())
+            + mcu.min_schedule_time()
+            + 0.1
+        )
         print_time = max(print_time, pin.last_set_time + 0.2)
         pin.last_set_time = print_time
-
-        pin.set_digital(
-            print_time,
-            1 if enabled else 0,
-        )
+        pin.set_pwm(print_time, value)
 
     def _register_frontend_compat_aliases(self) -> None:
         for alias in (f"AFC_lane {self.name}", f"AFC_stepper {self.name}"):
@@ -226,14 +247,19 @@ class AFCCanvasLane(AFCLane):
         speed = speed_data[0] if isinstance(speed_data, tuple) else speed_data
         return self._canvas_move_until(endstop, distance, speed)
 
-    def apply_canvas_led(self, color_string):
+    def apply_canvas_led(self, color_string: str) -> None:
+        """
+        Apply the red and white color channels as PWM duty cycles.
+
+        :param color_string: comma-separated RGBW LED color values
+        """
         channels = [item.strip() for item in str(color_string).split(",")]
         while len(channels) < 4:
             channels.append("0")
-        red_on = float(channels[0]) > 0
-        white_on = float(channels[3]) > 0
-        self._set_gpio_pin(self.red_led_pin, red_on)
-        self._set_gpio_pin(self.white_led_pin, white_on)
+        red_value = max(0.0, min(float(channels[0]), 1.0))
+        white_value = max(0.0, min(float(channels[3]), 1.0))
+        self._set_gpio_pin(self.red_led_pin, red_value)
+        self._set_gpio_pin(self.white_led_pin, white_value)
 
     def disengage_motors(self, direction):
         if self.disengage_distance <= 0:

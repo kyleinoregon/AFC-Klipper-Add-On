@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, call
 
+import pytest
+
 from extras.AFC_canvas_lane import AFCCanvasLane
 from extras.AFC_lane import AFCHomingPoints, AFCLane, AFCMoveWarning, SpeedMode
 from tests.conftest import MockAFC, MockConfig, MockLogger, MockPrinter, MockReactor
@@ -33,6 +35,7 @@ def _make_canvas_lane(name="lane1"):
     lane.unit_obj.move_to_hub = MagicMock(return_value=(True, 10.0, AFCMoveWarning.NONE))
     lane.unit_obj.lane_unloading = MagicMock()
     lane.unit_obj.cutter_sensor_state = False
+    lane.hub_obj = None
     lane.canvas_motor = MagicMock()
     lane.red_led_pin = MagicMock()
     lane.white_led_pin = MagicMock()
@@ -108,10 +111,14 @@ def _make_configured_canvas_lane(monkeypatch, **config_values):
     afc = MockAFC()
     printer = MockPrinter(afc=afc)
     printer._objects["drv8833 motor"] = MagicMock()
+    pins = MagicMock()
+    pins.setup_pin.side_effect = [MagicMock(), MagicMock()]
+    printer._objects["pins"] = pins
 
     def mock_lane_init(lane, config):
         lane.printer = printer
         lane.afc = afc
+        lane.reactor = printer.get_reactor()
         lane.name = "lane1"
         lane.fullname = "AFC_canvas_lane lane1"
         lane.custom_load_cmd = None
@@ -162,7 +169,7 @@ def test_canvas_load_recovery_defaults(monkeypatch):
     lane = _make_configured_canvas_lane(monkeypatch)
 
     assert lane.load_attempts == 3
-    assert lane.load_recovery_retract_distance == 10.0
+    assert lane.load_recovery_retract_distance == 30.0
 
 
 def test_canvas_load_recovery_is_configurable(monkeypatch):
@@ -300,68 +307,185 @@ def test_move_with_odometer_stops_early_when_condition_is_met():
     assert lane.canvas_motor.drv8833_set_speed.call_args_list[-1] == call(0.0)
 
 
-def test_apply_canvas_led_maps_red_and_white():
-    lane = _make_canvas_lane()
-    lane.red_led_pin.get_mcu.return_value.estimated_print_time.return_value = 0.0
-    lane.red_led_pin.get_mcu.return_value.min_schedule_time.return_value = 0.0
-    lane.white_led_pin.get_mcu.return_value.estimated_print_time.return_value = 0.0
-    lane.white_led_pin.get_mcu.return_value.min_schedule_time.return_value = 0.0
+class TestAFCCanvasLaneSetupLedPin:
+    def test_missing_pin_is_not_configured(self, monkeypatch):
+        lane = _make_configured_canvas_lane(monkeypatch)
+        pins = lane.printer.lookup_object("pins")
 
-    AFCCanvasLane.apply_canvas_led(lane, "1,0,0,1")
+        assert lane.red_led_pin is None
+        assert lane.white_led_pin is None
+        pins.setup_pin.assert_not_called()
 
-    lane.red_led_pin.set_digital.assert_called_once_with(0.0, 1.0)
-    lane.white_led_pin.set_digital.assert_called_once_with(0.0, 1.0)
+    def test_pin_is_configured_for_software_pwm(self, monkeypatch):
+        lane = _make_configured_canvas_lane(monkeypatch, led_red_pin="PA1")
+        pins = lane.printer.lookup_object("pins")
 
-
-def test_custom_load_runs_hub_move_and_assisted_extruder_move():
-    lane = _make_canvas_lane()
-    lane.get_toolhead_pre_sensor_state = MagicMock(return_value=False)
-
-    AFCCanvasLane.cmd_AFC_CANVAS_TOOL_LOAD(lane, MagicMock())
-
-    lane.unit_obj.move_to_hub.assert_called_once()
-    lane.afc.gcode.run_script_from_command.assert_called_once_with(
-        "AFC_PARK EXTRUDER=extruder"
-    )
-    lane.afc.move_e_pos.assert_called_once_with(72.0, 25.0, "CANVAS tool stn", wait_tool=False)
-    assert lane.loaded_to_hub is True
-    assert lane.canvas_motor.drv8833_set_speed.call_args_list[-1] == call(0.0)
+        pins.setup_pin.assert_called_once_with("pwm", "PA1")
+        lane.red_led_pin.setup_cycle_time.assert_called_once_with(0.01, False)
+        lane.red_led_pin.setup_start_value.assert_called_once_with(0.0, 0.0)
+        lane.red_led_pin.setup_max_duration.assert_called_once_with(0.0)
+        assert lane.red_led_pin.last_set_time == 0.0
+        assert lane.white_led_pin is None
 
 
-def test_custom_load_stops_when_cutter_sensor_engages():
-    lane = _make_canvas_lane()
-    lane.get_toolhead_pre_sensor_state = MagicMock(return_value=False)
+class TestAFCCanvasLaneSetGpioPin:
+    def test_missing_pin_returns_without_scheduling(self, monkeypatch):
+        lane = _make_configured_canvas_lane(monkeypatch)
+        lane.reactor.monotonic = MagicMock()
 
-    def pause_side_effect(until):
+        lane._set_gpio_pin(None, 0.5)
+
+        lane.reactor.monotonic.assert_not_called()
+
+    def test_sets_fractional_pwm_at_mcu_schedule_time(self, monkeypatch):
+        lane = _make_configured_canvas_lane(monkeypatch, led_red_pin="PA1")
+        pin = lane.red_led_pin
+        lane.reactor.monotonic = MagicMock(return_value=10.0)
+        pin.get_mcu.return_value.estimated_print_time.return_value = 4.0
+        pin.get_mcu.return_value.min_schedule_time.return_value = 0.05
+
+        lane._set_gpio_pin(pin, 0.35)
+
+        pin.set_pwm.assert_called_once()
+        print_time, value = pin.set_pwm.call_args.args
+        assert print_time == pytest.approx(4.15)
+        assert value == 0.35
+        assert pin.last_set_time == pytest.approx(4.15)
+
+    def test_respects_previous_pin_schedule_time(self, monkeypatch):
+        lane = _make_configured_canvas_lane(monkeypatch, led_red_pin="PA1")
+        pin = lane.red_led_pin
+        pin.last_set_time = 6.0
+        pin.get_mcu.return_value.estimated_print_time.return_value = 4.0
+        pin.get_mcu.return_value.min_schedule_time.return_value = 0.05
+
+        lane._set_gpio_pin(pin, 0.75)
+
+        pin.set_pwm.assert_called_once_with(6.2, 0.75)
+        assert pin.last_set_time == 6.2
+
+
+class TestAFCCanvasLaneApplyCanvasLed:
+    def test_maps_fractional_red_and_white_channels_to_pwm(self, monkeypatch):
+        lane = _make_configured_canvas_lane(
+            monkeypatch,
+            led_red_pin="PA1",
+            led_white_pin="PA2",
+        )
+        lane._set_gpio_pin = MagicMock()
+
+        lane.apply_canvas_led("0.25,0,0,0.7")
+
+        assert lane._set_gpio_pin.call_args_list == [
+            call(lane.red_led_pin, 0.25),
+            call(lane.white_led_pin, 0.7),
+        ]
+
+    def test_missing_white_channel_defaults_to_off(self, monkeypatch):
+        lane = _make_configured_canvas_lane(
+            monkeypatch,
+            led_red_pin="PA1",
+            led_white_pin="PA2",
+        )
+        lane._set_gpio_pin = MagicMock()
+
+        lane.apply_canvas_led("0.4")
+
+        assert lane._set_gpio_pin.call_args_list == [
+            call(lane.red_led_pin, 0.4),
+            call(lane.white_led_pin, 0.0),
+        ]
+
+    def test_channel_values_are_clamped_to_pwm_range(self, monkeypatch):
+        lane = _make_configured_canvas_lane(
+            monkeypatch,
+            led_red_pin="PA1",
+            led_white_pin="PA2",
+        )
+        lane._set_gpio_pin = MagicMock()
+
+        lane.apply_canvas_led("1.5,0,0,-0.2")
+
+        assert lane._set_gpio_pin.call_args_list == [
+            call(lane.red_led_pin, 1.0),
+            call(lane.white_led_pin, 0.0),
+        ]
+
+
+class TestAFCCanvasLaneCmdAfcCanvasToolLoad:
+    def test_runs_extruder_move_after_sensor_triggers(self):
+        lane = _make_canvas_lane()
+        lane.get_toolhead_pre_sensor_state = MagicMock(
+            side_effect=[False, False, True]
+        )
+
+        def record_odometer_pulses(
+            distance,
+            speed,
+            label,
+            wait_tool=True,
+        ) -> None:
+            lane.odometer_count = lane.odometer_load_threshold + 1
+
+        lane.afc.move_e_pos.side_effect = record_odometer_pulses
+
+        AFCCanvasLane.cmd_AFC_CANVAS_TOOL_LOAD(lane, MagicMock())
+
+        assert lane.get_toolhead_pre_sensor_state.call_count == 3
+        assert lane.afc.gcode.run_script_from_command.call_args_list == [
+            call("AFC_PARK EXTRUDER=extruder")
+        ]
+        assert lane.afc.move_e_pos.call_args_list == [
+            call(72.0, 25.0, "CANVAS tool load", wait_tool=True)
+        ]
+        assert lane.canvas_motor.drv8833_set_speed.call_args_list == [
+            call(20.0),
+            call(0.0),
+            call(0.0),
+        ]
+        assert lane.odometer_count == 4
+        assert lane.loaded_to_hub is True
+        assert lane.logger.messages == [
+            ("info", "Attempting CANVAS tool load for lane1, try 1/3")
+        ]
+        lane.afc.error.handle_lane_failure.assert_not_called()
+
+    def test_stops_when_cutter_sensor_is_engaged(self):
+        lane = _make_canvas_lane()
         lane.unit_obj.cutter_sensor_state = True
 
-    lane.reactor.pause = MagicMock(side_effect=pause_side_effect)
+        AFCCanvasLane.cmd_AFC_CANVAS_TOOL_LOAD(lane, MagicMock())
 
-    AFCCanvasLane.cmd_AFC_CANVAS_TOOL_LOAD(lane, MagicMock())
+        lane.get_toolhead_pre_sensor_state.assert_not_called()
+        lane.afc.gcode.run_script_from_command.assert_not_called()
+        lane.afc.move_e_pos.assert_not_called()
+        lane.canvas_motor.drv8833_set_speed.assert_not_called()
+        lane.afc.error.handle_lane_failure.assert_called_once_with(
+            lane,
+            "CANVAS tool load failed: cutter sensor is engaged.",
+        )
+        assert lane.loaded_to_hub is False
+        assert lane.logger.messages == []
 
-    lane.afc.move_e_pos.assert_not_called()
-    assert lane.canvas_motor.drv8833_set_speed.call_args_list[-1] == call(0.0)
-    assert lane.loaded_to_hub is False
 
+class TestAFCCanvasLaneCmdAfcCanvasToolUnload:
+    def test_runs_macros_then_retracts(self):
+        lane = _make_canvas_lane()
+        lane.get_toolhead_pre_sensor_state = MagicMock(return_value=False)
+        lane.disengage_motors = MagicMock()
 
-def test_custom_unload_runs_macros_then_retracts():
-    lane = _make_canvas_lane()
-    lane.get_toolhead_pre_sensor_state = MagicMock(side_effect=[True, False])
-    lane.move = MagicMock()
-    lane.disengage_motors = MagicMock()
+        AFCCanvasLane.cmd_AFC_CANVAS_TOOL_UNLOAD(lane, MagicMock())
 
-    AFCCanvasLane.cmd_AFC_CANVAS_TOOL_UNLOAD(lane, MagicMock())
-
-    assert lane.afc.gcode.run_script_from_command.call_args_list[:2] == [
-        call("AFC_CUT EXTRUDER=extruder"),
-        call("AFC_PARK EXTRUDER=extruder"),
-    ]
-    assert lane.afc.move_e_pos.call_args_list[:3] == [
-        call(-2, 20.0, "Quick Pull", wait_tool=False),
-        call(-40.0, 20.0, "CANVAS tool unload", wait_tool=True),
-        call(-12.0, 20.0, "CANVAS after extruder", wait_tool=True),
-    ]
-    lane.move.assert_any_call(-5.0, 20.0, 400.0, False)
-    lane.move.assert_any_call(-7.0, 18.0, 400.0, False)
-    lane.disengage_motors.assert_called_once_with(-1.0)
-    assert lane.loaded_to_hub is False
+        assert lane.afc.gcode.run_script_from_command.call_args_list == [
+            call("AFC_CUT EXTRUDER=extruder"),
+            call("AFC_PARK EXTRUDER=extruder"),
+        ]
+        assert lane.afc.move_e_pos.call_args_list == [
+            call(-40.0, 20.0, "CANVAS tool unload", wait_tool=True)
+        ]
+        lane.disengage_motors.assert_called_once_with(-1.0)
+        assert lane.loaded_to_hub is False
+        assert lane.logger.messages == [
+            ("info", "Attempting CANVAS tool unload for lane1, try 1/3")
+        ]
+        lane.afc.error.handle_lane_failure.assert_not_called()
