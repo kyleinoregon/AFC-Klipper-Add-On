@@ -38,6 +38,7 @@ class AFCCanvasLane(AFCLane):
     DEFAULT_EXTRUDER_FEED_TIMEOUT = 10.0
     DEFAULT_LOAD_ATTEMPTS = 3
     DEFAULT_LOAD_RECOVERY_RETRACT_DISTANCE = 30.0
+    DEFAULT_CUTTER_WAIT_TIME = 3.0
     GPIO_PIN_MIN_TIME = 2
     LED_PWM_CYCLE_TIME = 0.01
 
@@ -330,21 +331,30 @@ class AFCCanvasLane(AFCLane):
 
         return min(moved, target_distance)
 
-    def _run_unload_macros(self):
+    def _run_cutter_macro(self) -> None:
+        """
+        Run the configured filament cutter macro.
+        """
         if self.afc.tool_cut:
             self.extruder_obj.estats.increase_cut_total()
             self.afc.gcode.run_script_from_command(
-                "{} EXTRUDER={}".format(self.afc.tool_cut_cmd, self.extruder_obj.name)
+                f"{self.afc.tool_cut_cmd} EXTRUDER={self.extruder_obj.name}"
             )
+
+    def _run_post_cut_macros(self) -> None:
+        """
+        Run the configured parking and tip-forming macros once.
+        """
+        if self.afc.tool_cut:
             if self.afc.park:
                 self.afc.gcode.run_script_from_command(
-                    "{} EXTRUDER={}".format(self.afc.park_cmd, self.extruder_obj.name)
+                    f"{self.afc.park_cmd} EXTRUDER={self.extruder_obj.name}"
                 )
 
         if self.afc.form_tip:
             if self.afc.park:
                 self.afc.gcode.run_script_from_command(
-                    "{} EXTRUDER={}".format(self.afc.park_cmd, self.extruder_obj.name)
+                    f"{self.afc.park_cmd} EXTRUDER={self.extruder_obj.name}"
                 )
             if self.afc.form_tip_cmd == "AFC":
                 self.printer.lookup_object("AFC_form_tip").tip_form()
@@ -486,12 +496,76 @@ class AFCCanvasLane(AFCLane):
         # Failure case
         self.afc.error.handle_lane_failure(self, f"CANVAS tool load failed after {self.load_attempts} attempts.")
 
-    def cmd_AFC_CANVAS_TOOL_UNLOAD(self, gcmd):
+    def run_cutter_sequence(self) -> bool:
+        """
+        Retry the cutter macro until the cutter sensor disengages.
+
+        :return bool: True when cutting is disabled or the sensor disengages
+        """
+        if not self.afc.tool_cut:
+            return True
+
+        for attempt in range(self.load_attempts):
+            attempt_number = attempt + 1
+            self.logger.info(
+                f"Attempting cutting filament, try {attempt_number}/{self.load_attempts}"
+            )
+            self._run_cutter_macro()
+            start = self.reactor.monotonic()
+            timed_out = False
+
+            while self._cutter_sensor_engaged():
+                now = self.reactor.monotonic()
+                if now - start >= self.DEFAULT_CUTTER_WAIT_TIME:
+                    self.logger.warning(
+                        "Cutter sensor did not disengage after cutting filament. Trying again."
+                    )
+                    timed_out = True
+                    break
+                self.reactor.pause(now + 0.005)
+
+            if timed_out:
+                continue
+
+            return True
+
+        return False
+
+    def cmd_AFC_CANVAS_TOOL_UNLOAD(self, gcmd: Any) -> None:
+        """
+        Unload filament from a CANVAS lane.
+
+        Usage
+        -------
+        `AFC_CANVAS_TOOL_UNLOAD LANE=<lane>`
+
+        Example
+        -------
+        ```
+        AFC_CANVAS_TOOL_UNLOAD LANE=lane1
+        ```
+        """
         self.select_lane()
         self.afc._check_extruder_temp(self)
         self.disable_buffer()
         self.unit_obj.lane_unloading(self)
-        self._run_unload_macros()
+
+        if self._cutter_sensor_engaged():
+            error_message = (
+                "CANVAS tool unload failed: cutter sensor is engaged before cutting."
+            )
+            self.afc.error.handle_lane_failure(self, error_message)
+            return
+
+        if not self.run_cutter_sequence():
+            error_message = (
+                "CANVAS tool unload failed: cutter sensor did not disengage after cutting."
+            )
+            self.afc.error.handle_lane_failure(self, error_message)
+            return
+
+        self._run_post_cut_macros()
+
         for attempt in range(self.load_attempts):
             self.logger.info(f"Attempting CANVAS tool unload for {self.name}, try {attempt+1}/{self.load_attempts}")
             failed_operation = "toolhead gear retract"

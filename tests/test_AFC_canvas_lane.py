@@ -118,6 +118,7 @@ def _make_configured_canvas_lane(monkeypatch, **config_values):
     def mock_lane_init(lane, config):
         lane.printer = printer
         lane.afc = afc
+        lane.logger = afc.logger
         lane.reactor = printer.get_reactor()
         lane.name = "lane1"
         lane.fullname = "AFC_canvas_lane lane1"
@@ -133,6 +134,34 @@ def _make_configured_canvas_lane(monkeypatch, **config_values):
     values.update(config_values)
     config = MockConfig(name="AFC_canvas_lane lane1", printer=printer, values=values)
     return AFCCanvasLane(config)
+
+
+def _make_initialized_canvas_lane(
+    monkeypatch: pytest.MonkeyPatch,
+) -> AFCCanvasLane:
+    lane = _make_configured_canvas_lane(monkeypatch)
+    lane.afc.tool_cut = True
+    lane.afc.park = True
+    lane.afc.form_tip = False
+    lane.afc.tool_cut_cmd = "AFC_CUT"
+    lane.afc.park_cmd = "AFC_PARK"
+    lane.afc.form_tip_cmd = "AFC"
+    lane.afc._check_extruder_temp = MagicMock(return_value=False)
+    lane.afc.move_e_pos = MagicMock()
+    lane.unit_obj = MagicMock()
+    lane.unit_obj.cutter_sensor_state = False
+    lane.unit_obj.lane_unloading = MagicMock()
+    lane.extruder_obj = MagicMock()
+    lane.extruder_obj.name = "extruder"
+    lane.extruder_obj.tool_stn_unload = 40.0
+    lane.extruder_obj.tool_unload_speed = 20.0
+    lane.hub_obj = None
+    lane.loaded_to_hub = True
+    lane.select_lane = MagicMock()
+    lane.disable_buffer = MagicMock()
+    lane.disengage_motors = MagicMock()
+    lane.get_toolhead_pre_sensor_state = MagicMock(return_value=False)
+    return lane
 
 
 def test_odometer_load_threshold_defaults_to_three(monkeypatch):
@@ -468,6 +497,150 @@ class TestAFCCanvasLaneCmdAfcCanvasToolLoad:
         assert lane.logger.messages == []
 
 
+class TestAFCCanvasLaneRunCutterMacro:
+    def test_runs_configured_cutter(self, monkeypatch):
+        lane = _make_initialized_canvas_lane(monkeypatch)
+
+        lane._run_cutter_macro()
+
+        lane.extruder_obj.estats.increase_cut_total.assert_called_once_with()
+        assert lane.afc.gcode.run_script_from_command.call_args_list == [
+            call("AFC_CUT EXTRUDER=extruder")
+        ]
+        assert lane.logger.messages == []
+
+    def test_skips_cutter_when_disabled(self, monkeypatch):
+        lane = _make_initialized_canvas_lane(monkeypatch)
+        lane.afc.tool_cut = False
+
+        lane._run_cutter_macro()
+
+        lane.extruder_obj.estats.increase_cut_total.assert_not_called()
+        lane.afc.gcode.run_script_from_command.assert_not_called()
+        assert lane.logger.messages == []
+
+
+class TestAFCCanvasLaneRunPostCutMacros:
+    def test_parks_after_cut_and_runs_builtin_tip_form(self, monkeypatch):
+        lane = _make_initialized_canvas_lane(monkeypatch)
+        lane.afc.form_tip = True
+        form_tip = MagicMock()
+        lane.printer._objects["AFC_form_tip"] = form_tip
+
+        lane._run_post_cut_macros()
+
+        assert lane.afc.gcode.run_script_from_command.call_args_list == [
+            call("AFC_PARK EXTRUDER=extruder"),
+            call("AFC_PARK EXTRUDER=extruder"),
+        ]
+        form_tip.tip_form.assert_called_once_with()
+        assert lane.logger.messages == []
+
+    def test_runs_custom_tip_form_without_parking(self, monkeypatch):
+        lane = _make_initialized_canvas_lane(monkeypatch)
+        lane.afc.tool_cut = False
+        lane.afc.park = False
+        lane.afc.form_tip = True
+        lane.afc.form_tip_cmd = "CUSTOM_FORM_TIP"
+
+        lane._run_post_cut_macros()
+
+        assert lane.afc.gcode.run_script_from_command.call_args_list == [
+            call("CUSTOM_FORM_TIP")
+        ]
+        assert lane.logger.messages == []
+
+    def test_skips_disabled_post_cut_macros(self, monkeypatch):
+        lane = _make_initialized_canvas_lane(monkeypatch)
+        lane.afc.park = False
+        lane.afc.form_tip = False
+
+        lane._run_post_cut_macros()
+
+        lane.afc.gcode.run_script_from_command.assert_not_called()
+        assert lane.logger.messages == []
+
+
+class TestAFCCanvasLaneRunCutterSequence:
+    def test_succeeds_without_cutting_when_cutter_is_disabled(self, monkeypatch):
+        lane = _make_initialized_canvas_lane(monkeypatch)
+        lane.afc.tool_cut = False
+        lane._run_cutter_macro = MagicMock()
+
+        result = lane.run_cutter_sequence()
+
+        assert result is True
+        lane._run_cutter_macro.assert_not_called()
+        assert lane.logger.messages == []
+
+    def test_polls_from_current_time_until_sensor_disengages(self, monkeypatch):
+        lane = _make_initialized_canvas_lane(monkeypatch)
+        lane._run_cutter_macro = MagicMock()
+        lane._cutter_sensor_engaged = MagicMock(side_effect=[True, False])
+        lane.reactor.monotonic = MagicMock(side_effect=[10.0, 10.25])
+        lane.reactor.pause = MagicMock()
+
+        result = lane.run_cutter_sequence()
+
+        assert result is True
+        lane._run_cutter_macro.assert_called_once_with()
+        lane.reactor.pause.assert_called_once_with(10.255)
+        assert lane.logger.messages == [
+            ("info", "Attempting cutting filament, try 1/3")
+        ]
+
+    def test_retries_after_timeout_then_succeeds(self, monkeypatch):
+        lane = _make_initialized_canvas_lane(monkeypatch)
+        lane.load_attempts = 2
+        lane._run_cutter_macro = MagicMock()
+        lane._cutter_sensor_engaged = MagicMock(side_effect=[True, False])
+        lane.reactor.monotonic = MagicMock(side_effect=[20.0, 23.0, 24.0])
+        lane.reactor.pause = MagicMock()
+
+        result = lane.run_cutter_sequence()
+
+        assert result is True
+        assert lane._run_cutter_macro.call_count == 2
+        lane.reactor.pause.assert_not_called()
+        assert lane.logger.messages == [
+            ("info", "Attempting cutting filament, try 1/2"),
+            (
+                "warning",
+                "Cutter sensor did not disengage after cutting filament. "
+                "Trying again.",
+            ),
+            ("info", "Attempting cutting filament, try 2/2"),
+        ]
+
+    def test_returns_false_after_all_attempts_time_out(self, monkeypatch):
+        lane = _make_initialized_canvas_lane(monkeypatch)
+        lane.load_attempts = 2
+        lane._run_cutter_macro = MagicMock()
+        lane._cutter_sensor_engaged = MagicMock(return_value=True)
+        lane.reactor.monotonic = MagicMock(side_effect=[0.0, 3.0, 4.0, 7.0])
+        lane.reactor.pause = MagicMock()
+
+        result = lane.run_cutter_sequence()
+
+        assert result is False
+        assert lane._run_cutter_macro.call_count == 2
+        lane.reactor.pause.assert_not_called()
+        assert lane.logger.messages == [
+            ("info", "Attempting cutting filament, try 1/2"),
+            (
+                "warning",
+                "Cutter sensor did not disengage after cutting filament. "
+                "Trying again.",
+            ),
+            ("info", "Attempting cutting filament, try 2/2"),
+            (
+                "warning",
+                "Cutter sensor did not disengage after cutting filament. "
+                "Trying again.",
+            ),
+        ]
+
+
 class TestAFCCanvasLaneCmdAfcCanvasToolUnload:
     def test_runs_macros_then_retracts(self):
         lane = _make_canvas_lane()
@@ -486,6 +659,50 @@ class TestAFCCanvasLaneCmdAfcCanvasToolUnload:
         lane.disengage_motors.assert_called_once_with(-1.0)
         assert lane.loaded_to_hub is False
         assert lane.logger.messages == [
+            ("info", "Attempting cutting filament, try 1/3"),
             ("info", "Attempting CANVAS tool unload for lane1, try 1/3")
         ]
         lane.afc.error.handle_lane_failure.assert_not_called()
+
+    def test_stops_when_cutter_sensor_is_engaged(self, monkeypatch):
+        lane = _make_initialized_canvas_lane(monkeypatch)
+        lane.unit_obj.cutter_sensor_state = True
+        lane.run_cutter_sequence = MagicMock()
+        lane._run_post_cut_macros = MagicMock()
+
+        lane.cmd_AFC_CANVAS_TOOL_UNLOAD(MagicMock())
+
+        lane.select_lane.assert_called_once_with()
+        lane.afc._check_extruder_temp.assert_called_once_with(lane)
+        lane.disable_buffer.assert_called_once_with()
+        lane.unit_obj.lane_unloading.assert_called_once_with(lane)
+        lane.run_cutter_sequence.assert_not_called()
+        lane._run_post_cut_macros.assert_not_called()
+        lane.afc.move_e_pos.assert_not_called()
+        lane.afc.error.handle_lane_failure.assert_called_once_with(
+            lane,
+            "CANVAS tool unload failed: cutter sensor is engaged before cutting.",
+        )
+        assert lane.loaded_to_hub is True
+        assert lane.logger.messages == []
+
+    def test_stops_when_cutter_retries_fail(self, monkeypatch):
+        lane = _make_initialized_canvas_lane(monkeypatch)
+        lane.run_cutter_sequence = MagicMock(return_value=False)
+        lane._run_post_cut_macros = MagicMock()
+
+        lane.cmd_AFC_CANVAS_TOOL_UNLOAD(MagicMock())
+
+        lane.select_lane.assert_called_once_with()
+        lane.afc._check_extruder_temp.assert_called_once_with(lane)
+        lane.disable_buffer.assert_called_once_with()
+        lane.unit_obj.lane_unloading.assert_called_once_with(lane)
+        lane.run_cutter_sequence.assert_called_once_with()
+        lane._run_post_cut_macros.assert_not_called()
+        lane.afc.move_e_pos.assert_not_called()
+        lane.afc.error.handle_lane_failure.assert_called_once_with(
+            lane,
+            "CANVAS tool unload failed: cutter sensor did not disengage after cutting.",
+        )
+        assert lane.loaded_to_hub is True
+        assert lane.logger.messages == []
