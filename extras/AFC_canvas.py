@@ -87,9 +87,6 @@ class afcCanvas(afcUnit):
         getattr(lane, "apply_canvas_led")(self.afc.led_ready)
         getattr(lane, "disengage_motors")(1.0)
 
-    def eject_lane(self, lane):
-        self.afc.error.AFC_error("CANVAS does not support ejecting lanes", pause=False)
-
     def move_to_hub(
         self,
         lane,

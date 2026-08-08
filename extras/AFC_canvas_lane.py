@@ -44,6 +44,7 @@ class AFCCanvasLane(AFCLane):
 
     def __init__(self, config):
         super().__init__(config)
+        self.supports_lane_unload = False
         self.drv8833_object_name = config.get("drv8833", None)
         if self.drv8833_object_name is None:
             raise CONFIG_ERROR(

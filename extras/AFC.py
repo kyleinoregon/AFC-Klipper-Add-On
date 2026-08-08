@@ -1343,6 +1343,11 @@ class afc:
         # TODO: update this to unload from toolhead and move all the way back to load
         # when homing is enabled
 
+        if not cur_lane.supports_lane_unload:
+            msg = f"Unloading is not supported on {cur_lane.unit}"
+            self.logger.warning(msg)
+            return
+
         self.current_state = State.EJECTING_LANE
 
         # TODO: add a check for multi-tools to verify lane is not loaded to toolhead before trying to unload

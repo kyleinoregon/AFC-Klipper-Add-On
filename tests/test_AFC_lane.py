@@ -27,7 +27,7 @@ from extras.AFC_lane import (
     AFCMoveWarning
 )
 from extras.AFC_stepper import AFCExtruderStepper
-from tests.conftest import MockAFC, MockLogger
+from tests.conftest import MockAFC, MockConfig, MockLogger, MockPrinter
 
 
 # ── SpeedMode ─────────────────────────────────────────────────────────────────
@@ -185,9 +185,9 @@ class TestExcludeTypes:
 
 
 # ── AFCLane initialization ────────────────────────────────────────────────────
-# AFCLane.__init__ is tightly coupled to Klipper's runtime; we bypass it with
-# __new__ and set attributes to their documented initial values.
 
+# Legacy tests below bypass the tightly coupled constructor and set documented
+# initial values directly.
 def _make_afc_lane(fullname="AFC_stepper lane1"):
     """Build an AFCLane bypassing the complex __init__."""
     lane = AFCLane.__new__(AFCLane)
@@ -225,10 +225,25 @@ def _make_afc_lane(fullname="AFC_stepper lane1"):
     lane.map = "T0"
     lane.gcode = MagicMock()
     lane.need_purge = False
+    lane.supports_lane_unload = True
     return lane
 
 
 class TestAFCLaneInit:
+    def test_lane_unload_supported_by_default(self):
+        afc = MockAFC()
+        afc.load_to_hub = False
+        printer = MockPrinter(afc=afc)
+        config = MockConfig(
+            name="AFC_stepper lane1",
+            printer=printer,
+            values={"unit": "Turtle_1:0"},
+        )
+
+        lane = AFCLane(config)
+
+        assert lane.supports_lane_unload is True
+
     def test_lane_name_extracted_from_fullname(self):
         lane = _make_afc_lane("AFC_stepper lane1")
         assert lane.name == "lane1"
