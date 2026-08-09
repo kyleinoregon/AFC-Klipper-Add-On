@@ -75,11 +75,15 @@ class afcCanvas(afcUnit):
         self.logger.debug(f"prep_load: {lane.name}")
         getattr(lane, "apply_canvas_led")(self.afc.led_loading)
 
-        getattr(lane, "move_with_odometer")(
-            self.prep_distance,
-            self.prep_speed,
-            stop_condition=lambda: not bool(lane.prep_state),
-        )
+        try:
+            getattr(lane, "move_with_odometer")(
+                self.prep_distance,
+                self.prep_speed,
+                stop_condition=lambda: not bool(lane.prep_state),
+            )
+        except TimeoutError:
+            self.logger.warning(f"prep_load: {lane.name} timed out")
+
 
     def prep_post_load(self, lane):
         lane._load_state = lane.prep_state
