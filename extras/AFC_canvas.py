@@ -183,10 +183,10 @@ class afcCanvas(afcUnit):
         Eject the filament from a CANVAS lane so the spool can be removed.
 
         Retracts until the lane's entry sensor no longer sees filament, then a
-        little further so the drive gear releases it. The spring rewinder on the
-        spool holder takes up the filament. Called by LANE_UNLOAD, which has
-        already checked that the printer is idle and the lane is not in the
-        toolhead.
+        little further so the drive gear releases it. The spool holder's spring
+        rewinder takes up what it can of the returned filament. Called by
+        LANE_UNLOAD, which has already checked that the printer is idle and the
+        lane is not in the toolhead.
 
         :param lane: Lane to eject
         """
@@ -218,7 +218,8 @@ class afcCanvas(afcUnit):
                                   "(eject_max_distance)")
                     else:
                         reason = (f"the filament stopped moving after {moved:.0f}mm. Check the spool "
-                                  "and the path from the spool to the unit")
+                                  "and the path from the spool to the unit; after a runout, pull the "
+                                  "remaining filament out of the lane by hand")
                     self.afc.error.handle_lane_failure(
                         lane, f"eject failed: {reason}.", pause=False
                     )
@@ -240,9 +241,6 @@ class afcCanvas(afcUnit):
 
     def calibrate_bowden(self, cur_lane, dis, tol):
         return True, "calibration_lane", 0
-
-    def calibrate_hub(self, cur_lane, tol):
-        return True, "", 0
 
     def calibration_lane_message(self) -> str:
         msg = "\nCANVAS lanes ({lanes}) need no distance calibration: loading runs until the "

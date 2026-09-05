@@ -90,8 +90,8 @@ class AFCCanvasLane(AFCLane):
             minval=0.0,
         )
         # Lane eject (LANE_UNLOAD): retract until the lane's entry sensor clears, then
-        # a little further so the drive gear lets go of the filament. The spring
-        # rewinder on the spool holder takes up the filament.
+        # a little further so the drive gear lets go of the filament. The spool
+        # holder's spring rewinder takes up what it can of the returned filament.
         self.eject_speed = config.getfloat("eject_speed", None, above=0.0)
         self.eject_max_distance = config.getfloat("eject_max_distance", None, above=0.0)
         self.eject_clear_distance = config.getfloat(
